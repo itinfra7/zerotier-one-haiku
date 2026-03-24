@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
+
+# ==============================================================================
+# ZeroTier One 1.16.0 Installer for Haiku R1/beta5 x86_64
+#
+# Release:
+# - Version: v1.1.0
+# - Date: 2026-03-24
+#
+# Credits:
+# - ZeroTier One Upstream: https://github.com/zerotier/ZeroTierOne
+# - Haiku Target Platform: https://www.haiku-os.org/
+# - Haiku adaptation, assets, and release packaging: itinfra7 on GitHub (https://github.com/itinfra7)
+# ==============================================================================
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SELF_PATH="${SELF_PATH:-$0}"
-
-case "$SELF_PATH" in
-	/*) ;;
-	*) SELF_PATH="$(command -v "$SELF_PATH" 2>/dev/null || printf '%s' "$SELF_PATH")" ;;
-esac
 
 ZT_VERSION="${ZT_VERSION:-1.16.0}"
+RELEASE_TAG="${RELEASE_TAG:-v1.1.0}"
+RELEASE_DATE="${RELEASE_DATE:-2026-03-24}"
+RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://github.com/itinfra7/zerotier-one-haiku/releases/download/${RELEASE_TAG}}"
 USE_LOCAL_SRC="${USE_LOCAL_SRC:-0}"
 LOCAL_SRC_DIR="${LOCAL_SRC_DIR:-$SCRIPT_DIR/zerotier-one-$ZT_VERSION}"
 SOURCE_URL="${SOURCE_URL:-https://github.com/zerotier/ZeroTierOne/archive/refs/tags/${ZT_VERSION}.tar.gz}"
@@ -17,12 +28,51 @@ WORK_ROOT="${WORK_ROOT:-/boot/home/zerotier-build}"
 BUILD_ROOT="${BUILD_ROOT:-$WORK_ROOT/ZeroTierOne-$ZT_VERSION}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-$WORK_ROOT/ZeroTierOne-$ZT_VERSION.tar.gz}"
 PATCH_PATH="${PATCH_PATH:-$WORK_ROOT/zerotier-one-haiku-$ZT_VERSION.patch}"
+ASSET_STAGING_ROOT="${ASSET_STAGING_ROOT:-$WORK_ROOT/release-assets}"
+ASSET_DIR="${ASSET_DIR:-$ASSET_STAGING_ROOT/install-zerotier-one-haiku.files}"
+PATCH_ASSET_NAME="${PATCH_ASSET_NAME:-zerotier-one-haiku-$ZT_VERSION.patch}"
+LOCAL_CONF_ASSET_NAME="${LOCAL_CONF_ASSET_NAME:-local.conf.json}"
+POLICY_REFRESH_ASSET_NAME="${POLICY_REFRESH_ASSET_NAME:-haiku-net-family-refresh.py}"
+PRELOAD_SOURCE_ASSET_NAME="${PRELOAD_SOURCE_ASSET_NAME:-haiku-net-family-preload.c}"
+HOTFIX_ASSET_NAME="${HOTFIX_ASSET_NAME:-apply-incremental-hotfixes.py}"
+PATCH_ASSET_URL="${PATCH_ASSET_URL:-$RELEASE_BASE_URL/$PATCH_ASSET_NAME}"
+LOCAL_CONF_ASSET_URL="${LOCAL_CONF_ASSET_URL:-$RELEASE_BASE_URL/$LOCAL_CONF_ASSET_NAME}"
+POLICY_REFRESH_ASSET_URL="${POLICY_REFRESH_ASSET_URL:-$RELEASE_BASE_URL/$POLICY_REFRESH_ASSET_NAME}"
+PRELOAD_SOURCE_ASSET_URL="${PRELOAD_SOURCE_ASSET_URL:-$RELEASE_BASE_URL/$PRELOAD_SOURCE_ASSET_NAME}"
+HOTFIX_ASSET_URL="${HOTFIX_ASSET_URL:-$RELEASE_BASE_URL/$HOTFIX_ASSET_NAME}"
+PATCH_SOURCE_PATH="${PATCH_SOURCE_PATH:-$ASSET_DIR/zerotier-one-haiku-$ZT_VERSION.patch}"
+LOCAL_CONF_TEMPLATE_PATH="${LOCAL_CONF_TEMPLATE_PATH:-$ASSET_DIR/local.conf.json}"
+POLICY_REFRESH_TEMPLATE_PATH="${POLICY_REFRESH_TEMPLATE_PATH:-$ASSET_DIR/haiku-net-family-refresh.py}"
+PRELOAD_SOURCE_TEMPLATE_PATH="${PRELOAD_SOURCE_TEMPLATE_PATH:-$ASSET_DIR/haiku-net-family-preload.c}"
+HOTFIX_SCRIPT_PATH="${HOTFIX_SCRIPT_PATH:-$ASSET_DIR/apply-incremental-hotfixes.py}"
 STATE_DIR="${STATE_DIR:-/boot/system/non-packaged/var/lib/zerotier-one}"
 BIN_DIR="${BIN_DIR:-/boot/system/non-packaged/bin}"
+USER_BIN_DIR="${USER_BIN_DIR:-/boot/home/config/non-packaged/bin}"
+USER_LIB_DIR="${USER_LIB_DIR:-/boot/home/config/non-packaged/lib}"
+POLICY_STATE_FILE="${POLICY_STATE_FILE:-/boot/home/config/settings/haiku-net-family-routes.conf}"
+POLICY_REFRESH_PATH="${POLICY_REFRESH_PATH:-$BIN_DIR/haiku-net-family-refresh.py}"
+POLICY_PRELOAD_LIB="${POLICY_PRELOAD_LIB:-$USER_LIB_DIR/libhaiku_net_family.so}"
+DESKTOP_ENV_FILE="${DESKTOP_ENV_FILE:-/boot/home/config/settings/launch/haiku-net-family-env}"
+PROFILE_PATH="${PROFILE_PATH:-/boot/home/config/settings/profile}"
+BASH_DOT_PROFILE_PATH="${BASH_DOT_PROFILE_PATH:-/boot/home/.bash_profile}"
+BASH_PROFILE_PATH="${BASH_PROFILE_PATH:-/boot/home/.profile}"
+BASH_RC_PATH="${BASH_RC_PATH:-/boot/home/.bashrc}"
+SSHD_CONFIG_PATH="${SSHD_CONFIG_PATH:-/boot/system/settings/ssh/sshd_config}"
+NET_FAMILY_POLICY_MODE="${NET_FAMILY_POLICY_MODE:-yes}"
 PRIMARY_PORT="${PRIMARY_PORT:-9993}"
 KEEPALIVE_INTERVAL_SECONDS="${KEEPALIVE_INTERVAL_SECONDS:-20}"
+BOOT_LAUNCH_DELAY_SECONDS="${BOOT_LAUNCH_DELAY_SECONDS:-1}"
+PUBLIC_NET_WATCHDOG_INITIAL_GRACE_SECONDS="${PUBLIC_NET_WATCHDOG_INITIAL_GRACE_SECONDS:-1}"
+PUBLIC_NET_WATCHDOG_RETRY_WAIT_SECONDS="${PUBLIC_NET_WATCHDOG_RETRY_WAIT_SECONDS:-5}"
+PUBLIC_NET_WATCHDOG_POLL_SECONDS="${PUBLIC_NET_WATCHDOG_POLL_SECONDS:-1}"
+PUBLIC_NET_WATCHDOG_MAX_RETRIES="${PUBLIC_NET_WATCHDOG_MAX_RETRIES:-10}"
+PUBLIC_NET_WATCHDOG_CONTROL_TIMEOUT_SECONDS="${PUBLIC_NET_WATCHDOG_CONTROL_TIMEOUT_SECONDS:-2}"
 BOOT_MARKER_BEGIN="# BEGIN HAIKU ZEROTIER AUTO START"
 BOOT_MARKER_END="# END HAIKU ZEROTIER AUTO START"
+PROFILE_MARKER_BEGIN="# BEGIN HAIKU NET FAMILY POLICY"
+PROFILE_MARKER_END="# END HAIKU NET FAMILY POLICY"
+SSHD_ENV_MARKER_BEGIN="# BEGIN HAIKU NET FAMILY SSHD ENV"
+SSHD_ENV_MARKER_END="# END HAIKU NET FAMILY SSHD ENV"
 
 log() {
 	printf '[haiku-zt-install] %s\n' "$*"
@@ -37,7 +87,149 @@ need_cmd() {
 	command -v "$1" >/dev/null 2>&1 || fail "missing command: $1"
 }
 
+extract_quoted_assignment() {
+	local file_path="$1"
+	local variable_name="$2"
+
+	[ -f "$file_path" ] || return 1
+	awk -F'"' -v key="$variable_name" '$1 ~ ("^" key "=") { print $2; exit }' "$file_path"
+}
+
+extract_sleep_value() {
+	local file_path="$1"
+
+	[ -f "$file_path" ] || return 1
+	awk '$1 == "sleep" { value = $2; gsub(/"/, "", value); print value; exit }' "$file_path"
+}
+
+reuse_existing_runtime_tuning() {
+	local value
+
+	if value="$(extract_sleep_value "$BIN_DIR/zerotier-launch.sh" 2>/dev/null)" && [ -n "$value" ]; then
+		BOOT_LAUNCH_DELAY_SECONDS="$value"
+	fi
+	if value="$(extract_quoted_assignment "$BIN_DIR/public-net-watchdog.sh" "initial_grace" 2>/dev/null)" && [ -n "$value" ]; then
+		PUBLIC_NET_WATCHDOG_INITIAL_GRACE_SECONDS="$value"
+	fi
+	if value="$(extract_quoted_assignment "$BIN_DIR/public-net-watchdog.sh" "retry_wait" 2>/dev/null)" && [ -n "$value" ]; then
+		PUBLIC_NET_WATCHDOG_RETRY_WAIT_SECONDS="$value"
+	fi
+	if value="$(extract_quoted_assignment "$BIN_DIR/public-net-watchdog.sh" "poll_seconds" 2>/dev/null)" && [ -n "$value" ]; then
+		PUBLIC_NET_WATCHDOG_POLL_SECONDS="$value"
+	fi
+	if value="$(extract_quoted_assignment "$BIN_DIR/public-net-watchdog.sh" "max_retries" 2>/dev/null)" && [ -n "$value" ]; then
+		PUBLIC_NET_WATCHDOG_MAX_RETRIES="$value"
+	fi
+	if value="$(extract_quoted_assignment "$BIN_DIR/public-net-watchdog.sh" "control_timeout" 2>/dev/null)" && [ -n "$value" ]; then
+		PUBLIC_NET_WATCHDOG_CONTROL_TIMEOUT_SECONDS="$value"
+	fi
+}
+
+remove_marked_block() {
+	local target_path="$1"
+	local marker_begin="$2"
+	local marker_end="$3"
+	local tmp_path
+
+	[ -e "$target_path" ] || return 0
+
+	tmp_path="${target_path}.tmp.$$"
+	awk -v begin="$marker_begin" -v end="$marker_end" '
+BEGIN { skip = 0 }
+$0 == begin { skip = 1; next }
+$0 == end { skip = 0; next }
+skip { next }
+{ print }
+' "$target_path" >"$tmp_path"
+	mv "$tmp_path" "$target_path"
+}
+
+render_template_file() {
+	local template_path="$1"
+	local output_path="$2"
+	shift 2
+	python3 - "$template_path" "$output_path" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+template_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+text = template_path.read_text()
+for item in sys.argv[3:]:
+    key, value = item.split('=', 1)
+    text = text.replace(f'@{key}@', value)
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text(text)
+PY
+}
+
+download_release_asset() {
+	local asset_url="$1"
+	local output_path="$2"
+	local asset_label="$3"
+
+	log "downloading release asset: $asset_label"
+	mkdir -p "$(dirname "$output_path")"
+	curl -L --fail -o "$output_path" "$asset_url"
+	[ -s "$output_path" ] || fail "failed to download release asset: $asset_label"
+}
+
+download_release_assets() {
+	log "refreshing release asset workspace: $ASSET_DIR"
+	rm -rf "$ASSET_STAGING_ROOT"
+	mkdir -p "$ASSET_DIR"
+
+	download_release_asset "$PATCH_ASSET_URL" "$PATCH_SOURCE_PATH" "$PATCH_ASSET_NAME"
+	download_release_asset "$LOCAL_CONF_ASSET_URL" "$LOCAL_CONF_TEMPLATE_PATH" "$LOCAL_CONF_ASSET_NAME"
+	download_release_asset "$POLICY_REFRESH_ASSET_URL" "$POLICY_REFRESH_TEMPLATE_PATH" "$POLICY_REFRESH_ASSET_NAME"
+	download_release_asset "$PRELOAD_SOURCE_ASSET_URL" "$PRELOAD_SOURCE_TEMPLATE_PATH" "$PRELOAD_SOURCE_ASSET_NAME"
+	download_release_asset "$HOTFIX_ASSET_URL" "$HOTFIX_SCRIPT_PATH" "$HOTFIX_ASSET_NAME"
+
+	[ -d "$ASSET_DIR" ] || fail "missing release asset directory: $ASSET_DIR"
+	[ -f "$PATCH_SOURCE_PATH" ] || fail "missing release patch asset: $PATCH_SOURCE_PATH"
+	[ -f "$LOCAL_CONF_TEMPLATE_PATH" ] || fail "missing release local.conf template: $LOCAL_CONF_TEMPLATE_PATH"
+	[ -f "$POLICY_REFRESH_TEMPLATE_PATH" ] || fail "missing release family policy refresh template: $POLICY_REFRESH_TEMPLATE_PATH"
+	[ -f "$PRELOAD_SOURCE_TEMPLATE_PATH" ] || fail "missing release preload source template: $PRELOAD_SOURCE_TEMPLATE_PATH"
+	[ -f "$HOTFIX_SCRIPT_PATH" ] || fail "missing release incremental hotfix script: $HOTFIX_SCRIPT_PATH"
+}
+
+copy_asset_file() {
+	local source_path="$1"
+	local output_path="$2"
+	mkdir -p "$(dirname "$output_path")"
+	cp "$source_path" "$output_path"
+}
+
+
+resolve_family_policy_mode() {
+	local answer=""
+
+	case "$NET_FAMILY_POLICY_MODE" in
+		1|yes|true|on|enable|enabled)
+			NET_FAMILY_POLICY_MODE="yes"
+			return 0
+			;;
+		0|no|false|off|disable|disabled)
+			NET_FAMILY_POLICY_MODE="no"
+			return 0
+			;;
+		auto|"")
+			NET_FAMILY_POLICY_MODE="yes"
+			return 0
+			;;
+		*)
+			fail "unsupported NET_FAMILY_POLICY_MODE: $NET_FAMILY_POLICY_MODE"
+			;;
+	esac
+}
+
 cleanup_running_zerotier() {
+	for tid in $({ ps | grep '/boot/system/non-packaged/bin/public-net-watchdog.sh' | grep -v grep | awk '{ print $(NF-3) }'; } || true); do
+		kill -9 "$tid" 2>/dev/null || true
+	done
+	for tid in $({ ps | grep '/boot/system/non-packaged/bin/zerotier-launch.sh' | grep -v grep | awk '{ print $(NF-3) }'; } || true); do
+		kill -9 "$tid" 2>/dev/null || true
+	done
 	for tid in $({ ps | grep '/boot/system/non-packaged/bin/zerotier-boot-start.sh' | grep -v grep | awk '{ print $(NF-3) }'; } || true); do
 		kill -9 "$tid" 2>/dev/null || true
 	done
@@ -64,17 +256,8 @@ cleanup_taps() {
 }
 
 write_local_conf() {
-	mkdir -p "$STATE_DIR"
-	cat >"$STATE_DIR/local.conf" <<EOF
-{
-  "settings": {
-    "primaryPort": ${PRIMARY_PORT},
-    "allowSecondaryPort": false,
-    "portMappingEnabled": false,
-    "allowTcpFallbackRelay": true
-  }
-}
-EOF
+	[ -f "$LOCAL_CONF_TEMPLATE_PATH" ] || fail "missing local.conf template: $LOCAL_CONF_TEMPLATE_PATH"
+	render_template_file "$LOCAL_CONF_TEMPLATE_PATH" "$STATE_DIR/local.conf" PRIMARY_PORT="$PRIMARY_PORT"
 }
 
 write_boot_helper() {
@@ -90,6 +273,8 @@ state_dir="/boot/system/non-packaged/var/lib/zerotier-one"
 primary_port="9993"
 public_device="/dev/net/virtio/0"
 lock_dir="/tmp/zerotier-boot-start.lock"
+route_refresh_path="/boot/system/non-packaged/bin/haiku-net-family-refresh.py"
+monitor_ticks=0
 
 shutdown_requested=0
 zt_pid=""
@@ -153,14 +338,20 @@ release_lock() {
 
 wait_for_boot_network() {
 	i=0
-	while [ "$i" -lt 600 ]; do
+	while [ "$i" -lt 120 ]; do
 		if ps | grep net_server | grep -v grep >/dev/null 2>&1 && have_public_ipv4 && have_default_route; then
 			return 0
 		fi
 		i=$((i + 1))
-		sleep 1
+		sleep 5
 	done
 	return 1
+}
+
+refresh_family_policy_cache() {
+	if [ -x "$route_refresh_path" ]; then
+		"$route_refresh_path" >/tmp/haiku-net-family-refresh.out 2>/tmp/haiku-net-family-refresh.err || true
+	fi
 }
 
 cleanup_taps() {
@@ -193,6 +384,16 @@ stop_children() {
 	kill_path '/boot/system/non-packaged/bin/zerotier-one' -9
 	kill_path '/boot/system/non-packaged/bin/zerotier-cli' -9
 	kill_path '/boot/system/non-packaged/bin/zerotier-keepalive.sh' -9
+	zt_pid=""
+}
+
+stop_children_for_shutdown() {
+	kill_path '/boot/system/non-packaged/bin/zerotier-keepalive.sh' -9
+	kill_path '/boot/system/non-packaged/bin/zerotier-cli' -9
+	if [ -n "$zt_pid" ] && kill -0 "$zt_pid" 2>/dev/null; then
+		kill -9 "$zt_pid" 2>/dev/null || true
+	fi
+	kill_path '/boot/system/non-packaged/bin/zerotier-one' -9
 	zt_pid=""
 }
 
@@ -323,6 +524,7 @@ start_cycle() {
 	join_configured_networks
 
 	if wait_for_configured_networks; then
+		refresh_family_policy_cache
 		log "configured networks visible attempt=$attempt"
 		return 0
 	fi
@@ -334,6 +536,10 @@ start_cycle() {
 monitor_cycle() {
 	while [ "$shutdown_requested" -eq 0 ]; do
 		if [ -n "$zt_pid" ] && kill -0 "$zt_pid" 2>/dev/null; then
+			monitor_ticks=$((monitor_ticks + 1))
+			if [ $((monitor_ticks % 3)) -eq 0 ]; then
+				refresh_family_policy_cache
+			fi
 			sleep 5
 			continue
 		fi
@@ -345,9 +551,8 @@ monitor_cycle() {
 
 handle_shutdown() {
 	shutdown_requested=1
-	log "shutdown signal received; stopping zerotier cleanly"
-	stop_children
-	cleanup_taps
+	log "shutdown signal received; stopping zerotier for reboot"
+	stop_children_for_shutdown
 	release_lock
 	exit 0
 }
@@ -378,6 +583,8 @@ if ! wait_for_boot_network; then
 	exit 1
 fi
 
+refresh_family_policy_cache
+
 log "boot network ready; waiting for tap allocation window"
 sleep 2
 
@@ -402,6 +609,297 @@ while [ "$shutdown_requested" -eq 0 ]; do
 done
 EOF
 	chmod 755 "$BIN_DIR/zerotier-boot-start.sh"
+}
+
+write_public_net_watchdog() {
+	mkdir -p "$BIN_DIR"
+	cat >"$BIN_DIR/public-net-watchdog.sh" <<EOF
+#!/bin/sh
+set -eu
+
+public_device="/dev/net/virtio/0"
+lock_dir="/tmp/public-net-watchdog.lock"
+log_file="/tmp/public-net-watchdog.log"
+initial_grace="${PUBLIC_NET_WATCHDOG_INITIAL_GRACE_SECONDS}"
+retry_wait="${PUBLIC_NET_WATCHDOG_RETRY_WAIT_SECONDS}"
+poll_seconds="${PUBLIC_NET_WATCHDOG_POLL_SECONDS}"
+max_retries="${PUBLIC_NET_WATCHDOG_MAX_RETRIES}"
+control_timeout="${PUBLIC_NET_WATCHDOG_CONTROL_TIMEOUT_SECONDS}"
+net_server_path="/boot/system/servers/net_server"
+shutdown_requested=0
+child_pid=""
+sshd_path="/boot/system/bin/sshd"
+sshd_stopped=0
+
+log() {
+	printf '[public-net-watchdog] %s\n' "\$*" >> "\$log_file"
+}
+
+have_public_ipv4() {
+	ifconfig "\$public_device" 2>/dev/null | grep -q 'inet addr: [0-9]'
+}
+
+have_default_route() {
+	route list 2>/dev/null | grep -Eq '(^default|^[[:space:]]*0\.0\.0\.0[[:space:]]+0\.0\.0\.0)'
+}
+
+boot_network_ready() {
+	have_public_ipv4 && have_default_route
+}
+
+pid_list_for_path() {
+	path="\$1"
+	{ ps | grep "\$path" | grep -v grep | awk '{ print \$(NF-3) }'; } || true
+}
+
+net_server_running() {
+	ps | grep '/boot/system/servers/net_server' | grep -v grep >/dev/null 2>&1
+}
+
+sshd_listener_pids() {
+	{ ps | grep '^/boot/system/bin/sshd -D' | grep -v grep | awk '{ print \$(NF-3) }'; } || true
+}
+
+sshd_running() {
+	ps | grep '^/boot/system/bin/sshd -D' | grep -v grep >/dev/null 2>&1
+}
+
+acquire_lock() {
+	if mkdir "\$lock_dir" 2>/dev/null; then
+		printf '%s\n' "\$\$" > "\$lock_dir/pid"
+		return 0
+	fi
+
+	if [ -r "\$lock_dir/pid" ]; then
+		other_pid=\$(cat "\$lock_dir/pid" 2>/dev/null || true)
+		if [ -n "\$other_pid" ] && kill -0 "\$other_pid" 2>/dev/null; then
+			log "another watchdog is already running pid=\$other_pid"
+			return 1
+		fi
+	fi
+
+	rm -rf "\$lock_dir"
+	mkdir "\$lock_dir"
+	printf '%s\n' "\$\$" > "\$lock_dir/pid"
+}
+
+release_lock() {
+	rm -rf "\$lock_dir"
+}
+
+kill_child() {
+	if [ -n "\$child_pid" ] && kill -0 "\$child_pid" 2>/dev/null; then
+		kill "\$child_pid" 2>/dev/null || true
+		sleep 1
+		kill -9 "\$child_pid" 2>/dev/null || true
+		wait "\$child_pid" 2>/dev/null || true
+	fi
+	child_pid=""
+}
+
+wait_for_network() {
+	limit="\$1"
+	elapsed=0
+	while [ "\$elapsed" -lt "\$limit" ]; do
+		if [ "\$shutdown_requested" -eq 1 ]; then
+			return 1
+		fi
+		if boot_network_ready; then
+			return 0
+		fi
+		sleep "\$poll_seconds"
+		elapsed=\$((elapsed + poll_seconds))
+	done
+	return 1
+}
+
+ensure_net_server_running() {
+	if ! net_server_running && [ -x "\$net_server_path" ]; then
+		"\$net_server_path" >/tmp/public-net-watchdog-net-server.out 2>/tmp/public-net-watchdog-net-server.err </dev/null &
+	fi
+}
+
+wait_for_net_server_ready() {
+	limit="\$1"
+	elapsed=0
+	while [ "\$elapsed" -lt "\$limit" ]; do
+		if [ "\$shutdown_requested" -eq 1 ]; then
+			return 1
+		fi
+		if net_server_running; then
+			return 0
+		fi
+		sleep 1
+		elapsed=\$((elapsed + 1))
+	done
+	return 1
+}
+
+stop_sshd_listener() {
+	if [ "\$sshd_stopped" -eq 1 ]; then
+		return 0
+	fi
+	if ! sshd_running; then
+		return 0
+	fi
+	log "stopping sshd before network recovery"
+	for tid in \$(sshd_listener_pids); do
+		kill "\$tid" 2>/dev/null || true
+	done
+	sleep 1
+	for tid in \$(sshd_listener_pids); do
+		kill -9 "\$tid" 2>/dev/null || true
+	done
+	sshd_stopped=1
+}
+
+start_sshd_listener() {
+	if [ "\$sshd_stopped" -ne 1 ]; then
+		return 0
+	fi
+	if [ ! -x "\$sshd_path" ]; then
+		return 0
+	fi
+	log "starting sshd after network recovery"
+	"\$sshd_path" >/tmp/public-net-watchdog-sshd.out 2>/tmp/public-net-watchdog-sshd.err </dev/null || true
+	sshd_stopped=0
+}
+
+run_with_timeout() {
+	timeout_seconds="\$1"
+	shift
+
+	"\$@" >/tmp/public-net-watchdog-cmd.out 2>/tmp/public-net-watchdog-cmd.err &
+	cmd_pid=\$!
+	child_pid="\$cmd_pid"
+	elapsed=0
+
+	while kill -0 "\$cmd_pid" 2>/dev/null; do
+		if [ "\$shutdown_requested" -eq 1 ]; then
+			kill_child
+			return 1
+		fi
+		if [ "\$elapsed" -ge "\$timeout_seconds" ]; then
+			kill "\$cmd_pid" 2>/dev/null || true
+			sleep 1
+			kill -9 "\$cmd_pid" 2>/dev/null || true
+			wait "\$cmd_pid" 2>/dev/null || true
+			child_pid=""
+			return 124
+		fi
+		sleep 1
+		elapsed=\$((elapsed + 1))
+	done
+
+	wait "\$cmd_pid" 2>/dev/null || {
+		child_pid=""
+		return \$?
+	}
+	child_pid=""
+	return 0
+}
+
+reset_interface() {
+	log "resetting interface state"
+	run_with_timeout "\$control_timeout" ifconfig "\$public_device" down || true
+	sleep 1
+	run_with_timeout "\$control_timeout" ifconfig "\$public_device" up || true
+	sleep 1
+}
+
+trigger_autoconfig() {
+	log "triggering DHCP auto-config"
+	ensure_net_server_running
+	wait_for_net_server_ready "\$control_timeout" || true
+	run_with_timeout "\$retry_wait" ifconfig "\$public_device" auto-config up || true
+}
+
+restart_net_server() {
+	log "restarting net_server"
+	kill net_server 2>/dev/null || true
+	sleep 1
+	ensure_net_server_running
+	wait_for_net_server_ready "\$retry_wait" || true
+}
+
+handle_shutdown() {
+	shutdown_requested=1
+	log "shutdown signal received; stopping watchdog cleanly"
+	kill_child
+	exit 0
+}
+
+handle_exit() {
+	kill_child
+	if [ "\$shutdown_requested" -eq 0 ]; then
+		start_sshd_listener
+	fi
+	release_lock
+}
+
+trap 'handle_shutdown' INT TERM HUP QUIT
+trap 'handle_exit' EXIT
+
+: > "\$log_file"
+if ! acquire_lock; then
+	exit 0
+fi
+
+if boot_network_ready; then
+	log "public network already ready"
+	exit 0
+fi
+
+log "waiting for stock DHCP during initial grace"
+if wait_for_network "\$initial_grace"; then
+	log "public network became ready without intervention"
+	exit 0
+fi
+
+attempt=1
+while [ "\$attempt" -le "\$max_retries" ]; do
+	if [ "\$shutdown_requested" -eq 1 ]; then
+		exit 0
+	fi
+	log "public network still missing; recovery attempt=\$attempt interface reset"
+	stop_sshd_listener
+	ensure_net_server_running
+	reset_interface
+	trigger_autoconfig
+	if wait_for_network "\$retry_wait"; then
+		log "public network restored after interface reset attempt=\$attempt"
+		start_sshd_listener
+		exit 0
+	fi
+
+	log "public network still missing; recovery attempt=\$attempt net_server restart"
+	restart_net_server
+	trigger_autoconfig
+	if wait_for_network "\$retry_wait"; then
+		log "public network restored after net_server restart attempt=\$attempt"
+		start_sshd_listener
+		exit 0
+	fi
+	attempt=\$((attempt + 1))
+done
+
+log "public network is still unavailable after all retries"
+start_sshd_listener
+exit 0
+EOF
+	chmod 755 "$BIN_DIR/public-net-watchdog.sh"
+}
+
+write_launch_helper() {
+	mkdir -p "$BIN_DIR"
+	cat >"$BIN_DIR/zerotier-launch.sh" <<EOF
+#!/bin/sh
+set -eu
+
+sleep "$BOOT_LAUNCH_DELAY_SECONDS"
+exec /bin/sh /boot/system/non-packaged/bin/zerotier-boot-start.sh
+EOF
+	chmod 755 "$BIN_DIR/zerotier-launch.sh"
 }
 
 write_keepalive_helper() {
@@ -431,131 +929,146 @@ EOF
 	chmod 755 "$BIN_DIR/zerotier-keepalive.sh"
 }
 
-write_embedded_patch() {
-	mkdir -p "$WORK_ROOT"
-	awk '
-$0 == "__ZT_HAIKU_PATCH_BEGIN__" { emit = 1; next }
-$0 == "__ZT_HAIKU_PATCH_END__" { exit }
-emit { print }
-' "$SELF_PATH" | base64 -d | gzip -dc > "$PATCH_PATH"
+cleanup_legacy_client_family_wrappers() {
+	rm -f "$USER_BIN_DIR/ping"
+	rm -f "$USER_BIN_DIR/ssh"
+	rm -f "$USER_BIN_DIR/haiku-net-family-policy.py"
+}
 
-	[ -s "$PATCH_PATH" ] || fail "failed to extract embedded Haiku patch"
+write_family_policy_refresh_helper() {
+	[ -f "$POLICY_REFRESH_TEMPLATE_PATH" ] || fail "missing family policy refresh template: $POLICY_REFRESH_TEMPLATE_PATH"
+	render_template_file "$POLICY_REFRESH_TEMPLATE_PATH" "$POLICY_REFRESH_PATH" POLICY_STATE_FILE="$POLICY_STATE_FILE"
+	chmod 755 "$POLICY_REFRESH_PATH"
+}
+
+write_family_policy_preload_library() {
+	local source_path="$WORK_ROOT/haiku-net-family-preload.c"
+
+	[ -f "$PRELOAD_SOURCE_TEMPLATE_PATH" ] || fail "missing preload source template: $PRELOAD_SOURCE_TEMPLATE_PATH"
+	mkdir -p "$WORK_ROOT" "$USER_LIB_DIR"
+	render_template_file "$PRELOAD_SOURCE_TEMPLATE_PATH" "$source_path" POLICY_STATE_FILE="$POLICY_STATE_FILE"
+	gcc -shared -fPIC -O2 -o "$POLICY_PRELOAD_LIB" "$source_path" -lnetwork
+}
+
+install_family_env_block() {
+	local target_path="$1"
+	local tmp_profile="${target_path}.tmp.$$"
+
+	mkdir -p "$(dirname "$target_path")"
+	touch "$target_path"
+
+	awk -v begin="$PROFILE_MARKER_BEGIN" -v end="$PROFILE_MARKER_END" '
+BEGIN { skip = 0 }
+$0 == begin { skip = 1; next }
+$0 == end { skip = 0; next }
+skip { next }
+{ print }
+' "$target_path" >"$tmp_profile"
+
+	cat >>"$tmp_profile" <<EOF
+
+$PROFILE_MARKER_BEGIN
+haiku_net_family_preload="$POLICY_PRELOAD_LIB"
+case ":\${LD_PRELOAD:-}:" in
+	*":\$haiku_net_family_preload:"*) ;;
+	"::") export LD_PRELOAD="\$haiku_net_family_preload" ;;
+	*) export LD_PRELOAD="\$haiku_net_family_preload:\${LD_PRELOAD}" ;;
+esac
+export HAIKU_NET_FAMILY_POLICY_FILE="$POLICY_STATE_FILE"
+$PROFILE_MARKER_END
+EOF
+
+	mv "$tmp_profile" "$target_path"
+}
+
+install_shell_family_policy() {
+	install_family_env_block "$PROFILE_PATH"
+	install_family_env_block "$BASH_DOT_PROFILE_PATH"
+	install_family_env_block "$BASH_PROFILE_PATH"
+	install_family_env_block "$BASH_RC_PATH"
+}
+
+remove_shell_family_policy() {
+	remove_marked_block "$PROFILE_PATH" "$PROFILE_MARKER_BEGIN" "$PROFILE_MARKER_END"
+	remove_marked_block "$BASH_DOT_PROFILE_PATH" "$PROFILE_MARKER_BEGIN" "$PROFILE_MARKER_END"
+	remove_marked_block "$BASH_PROFILE_PATH" "$PROFILE_MARKER_BEGIN" "$PROFILE_MARKER_END"
+	remove_marked_block "$BASH_RC_PATH" "$PROFILE_MARKER_BEGIN" "$PROFILE_MARKER_END"
+}
+
+write_desktop_family_policy() {
+	mkdir -p "$(dirname "$DESKTOP_ENV_FILE")"
+	cat >"$DESKTOP_ENV_FILE" <<EOF
+target desktop {
+	env {
+		LD_PRELOAD $POLICY_PRELOAD_LIB
+		HAIKU_NET_FAMILY_POLICY_FILE $POLICY_STATE_FILE
+	}
+}
+EOF
+}
+
+install_sshd_family_policy() {
+	local tmp_config="${SSHD_CONFIG_PATH}.tmp.$$"
+
+	mkdir -p "$(dirname "$SSHD_CONFIG_PATH")"
+	touch "$SSHD_CONFIG_PATH"
+
+	awk -v begin="$SSHD_ENV_MARKER_BEGIN" -v end="$SSHD_ENV_MARKER_END" '
+BEGIN { skip = 0 }
+$0 == begin { skip = 1; next }
+$0 == end { skip = 0; next }
+skip { next }
+{ print }
+' "$SSHD_CONFIG_PATH" >"$tmp_config"
+
+	cat >>"$tmp_config" <<EOF
+
+$SSHD_ENV_MARKER_BEGIN
+SetEnv LD_PRELOAD=$POLICY_PRELOAD_LIB HAIKU_NET_FAMILY_POLICY_FILE=$POLICY_STATE_FILE
+$SSHD_ENV_MARKER_END
+EOF
+
+	/bin/sshd -t -f "$tmp_config" >/dev/null 2>&1 || fail "sshd config validation failed"
+	mv "$tmp_config" "$SSHD_CONFIG_PATH"
+}
+
+sshd_family_policy_present() {
+	[ -f "$SSHD_CONFIG_PATH" ] && grep -F "$SSHD_ENV_MARKER_BEGIN" "$SSHD_CONFIG_PATH" >/dev/null 2>&1
+}
+
+remove_sshd_family_policy() {
+	remove_marked_block "$SSHD_CONFIG_PATH" "$SSHD_ENV_MARKER_BEGIN" "$SSHD_ENV_MARKER_END"
+}
+
+remove_desktop_family_policy() {
+	rm -f "$DESKTOP_ENV_FILE"
+}
+
+remove_family_policy_artifacts() {
+	remove_shell_family_policy
+	remove_desktop_family_policy
+	remove_sshd_family_policy
+	rm -f "$POLICY_PRELOAD_LIB" "$POLICY_REFRESH_PATH" "$POLICY_STATE_FILE"
+}
+
+restart_sshd_listener() {
+	for tid in $({ ps | grep '^/boot/system/bin/sshd -D' | grep -v grep | awk '{ print $(NF-3) }'; } || true); do
+		kill "$tid" 2>/dev/null || true
+	done
+	sleep 1
+	/bin/sshd
+}
+
+write_patch_asset() {
+	[ -f "$PATCH_SOURCE_PATH" ] || fail "missing patch asset: $PATCH_SOURCE_PATH"
+	mkdir -p "$WORK_ROOT"
+	cp "$PATCH_SOURCE_PATH" "$PATCH_PATH"
+	[ -s "$PATCH_PATH" ] || fail "failed to prepare Haiku patch asset"
 }
 
 apply_incremental_hotfixes() {
-python3 - "$BUILD_ROOT" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-build_root = Path(sys.argv[1])
-
-def replace_once(text, old, new, label):
-    if new and new in text:
-        return text
-    if old not in text:
-        raise SystemExit(f"unable to apply {label}")
-    return text.replace(old, new, 1)
-
-one_path = build_root / "service" / "OneService.cpp"
-one_text = one_path.read_text()
-one_old = """#ifdef __HAIKU__
-\t\t\tif (n.tap() && (n.tap()->deviceName().compare(0, 4, "tap/") == 0)) {
-\t\t\t\tInetAddress preferredV6;
-\t\t\t\tfor (std::vector<InetAddress>::const_iterator ip(newManagedIps.begin()); ip != newManagedIps.end(); ++ip) {
-\t\t\t\t\tif (ip->isV6() && ((! preferredV6) || (ip->netmaskBits() > preferredV6.netmaskBits()))) {
-\t\t\t\t\t\tpreferredV6 = *ip;
-\t\t\t\t\t}
-\t\t\t\t}
-\t\t\t\tif (preferredV6) {
-\t\t\t\t\tnewManagedIps.erase(
-\t\t\t\t\t\tstd::remove_if(
-\t\t\t\t\t\t\tnewManagedIps.begin(),
-\t\t\t\t\t\t\tnewManagedIps.end(),
-\t\t\t\t\t\t\t[preferredV6](const InetAddress& candidate) {
-\t\t\t\t\t\t\t\treturn candidate.isV6() && (candidate != preferredV6);
-\t\t\t\t\t\t\t}),
-\t\t\t\t\t\tnewManagedIps.end());
-\t\t\t\t}
-\t\t\t}
-#endif
-
-"""
-if "preferredV6" in one_text:
-    one_text = replace_once(one_text, one_old, "", "OneService hotfix")
-    one_path.write_text(one_text)
-
-hpp_path = build_root / "osdep" / "BSDEthernetTap.hpp"
-hpp_text = hpp_path.read_text()
-hpp_old = """\t\tstd::vector<InetAddress> _haikuLocalV6Ips;\n"""
-hpp_new = """\t\tstd::vector<InetAddress> _haikuLocalV6Ips;\n\t\tstd::vector<InetAddress> _haikuManagedV6Ips;\n"""
-if "_haikuManagedV6Ips" not in hpp_text:
-    hpp_text = replace_once(hpp_text, hpp_old, hpp_new, "BSDEthernetTap.hpp hotfix")
-    hpp_path.write_text(hpp_text)
-
-bsd_path = build_root / "osdep" / "BSDEthernetTap.cpp"
-bsd_text = bsd_path.read_text()
-if "___haikuAdjustIpv6OnLinkRoute" not in bsd_text:
-    bsd_anchor_old = """\t\tfprintf(stderr, \"HAIKU TAP ROUTE dev=%s net=%s/%s exit=%d\" ZT_EOL_S, dev.c_str(), network, prefixLen, exitcode);\n\t\tfflush(stderr);\n\t}\n}\n\nstatic void ___haikuEnsureIpv6MulticastRoutes(const std::string& dev)\n{"""
-    bsd_anchor_new = """\t\tfprintf(stderr, \"HAIKU TAP ROUTE dev=%s net=%s/%s exit=%d\" ZT_EOL_S, dev.c_str(), network, prefixLen, exitcode);\n\t\tfflush(stderr);\n\t}\n}\n\nstatic void ___haikuAdjustIpv6OnLinkRoute(const char* op, const std::string& dev, const InetAddress& ip)\n{\n\tif ((! ip.isV6()) || (! ip.netmaskBits()))\n\t\treturn;\n\n\tInetAddress network = ip.network();\n\tchar networkBuf[128];\n\tchar prefixBuf[8];\n\tOSUtils::ztsnprintf(prefixBuf, sizeof(prefixBuf), \"%u\", ip.netmaskBits());\n\n\tlong cpid = (long)vfork();\n\tif (cpid == 0) {\n\t\t::execlp(\"route\", \"route\", op, dev.c_str(), \"inet6\", network.toIpString(networkBuf), \"prefixlen\", prefixBuf, (const char*)0);\n\t\t::_exit(-1);\n\t}\n\telse if (cpid > 0) {\n\t\tint exitcode = -1;\n\t\t::waitpid(cpid, &exitcode, 0);\n\t\tfprintf(stderr, \"HAIKU TAP ROUTE dev=%s op=%s net=%s/%s exit=%d\" ZT_EOL_S, dev.c_str(), op, network.toIpString(networkBuf), prefixBuf, exitcode);\n\t\tfflush(stderr);\n\t}\n}\n\nstatic void ___haikuEnsureIpv6MulticastRoutes(const std::string& dev)\n{"""
-    bsd_text = replace_once(bsd_text, bsd_anchor_old, bsd_anchor_new, "BSDEthernetTap route helper")
-
-if "___haikuReconcileIpv6Routes" not in bsd_text:
-    reconcile_anchor_old = """static void ___haikuEnsureIpv6MulticastRoutes(const std::string& dev)\n{\n\t// Haiku does not auto-install the multicast routes needed for IPv6 ND on tap devices.\n\t// Without these, on-link IPv6 traffic fails with ENETUNREACH before any packet is emitted.\n\t___haikuEnsureIpv6MulticastRoute(dev, \"ff00::\", \"8\");\n\t___haikuEnsureIpv6MulticastRoute(dev, \"ff02::\", \"16\");\n}\n"""
-    reconcile_anchor_new = """static void ___haikuEnsureIpv6MulticastRoutes(const std::string& dev)\n{\n\t// Haiku does not auto-install the multicast routes needed for IPv6 ND on tap devices.\n\t// Without these, on-link IPv6 traffic fails with ENETUNREACH before any packet is emitted.\n\t___haikuEnsureIpv6MulticastRoute(dev, \"ff00::\", \"8\");\n\t___haikuEnsureIpv6MulticastRoute(dev, \"ff02::\", \"16\");\n}\n\nstatic void ___haikuReconcileIpv6Routes(const std::string& dev, const std::vector<InetAddress>& ips)\n{\n\tfor (std::vector<InetAddress>::const_iterator ip(ips.begin()); ip != ips.end(); ++ip) {\n\t\t___haikuAdjustIpv6OnLinkRoute(\"add\", dev, *ip);\n\t}\n\t___haikuEnsureIpv6MulticastRoutes(dev);\n}\n"""
-    bsd_text = replace_once(bsd_text, reconcile_anchor_old, reconcile_anchor_new, "BSDEthernetTap route reconcile helper")
-
-if "_haikuManagedV6Ips.push_back(ip);" not in bsd_text:
-    bsd_add_old = """\t\t\t\t\tif (haikuTap) {\n\t\t\t\t\t\t___haikuEnsureIpv6MulticastRoutes(_dev);\n\t\t\t\t\t}\n"""
-    bsd_add_new = """\t\t\t\t\tif (haikuTap) {\n\t\t\t\t\t\t_haikuManagedV6Ips.erase(\n\t\t\t\t\t\t\tstd::remove_if(\n\t\t\t\t\t\t\t\t_haikuManagedV6Ips.begin(),\n\t\t\t\t\t\t\t\t_haikuManagedV6Ips.end(),\n\t\t\t\t\t\t\t\t[ip](const InetAddress& candidate) {\n\t\t\t\t\t\t\t\t\treturn candidate.ipOnly() == ip.ipOnly();\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t_haikuManagedV6Ips.end());\n\t\t\t\t\t\t_haikuManagedV6Ips.push_back(ip);\n\t\t\t\t\t\t___haikuReconcileIpv6Routes(_dev, _haikuManagedV6Ips);\n\t\t\t\t\t}\n"""
-    bsd_text = replace_once(bsd_text, bsd_add_old, bsd_add_new, "BSDEthernetTap addIp hotfix")
-
-if "___haikuReconcileIpv6Routes(_dev, _haikuManagedV6Ips);" not in bsd_text:
-    raise SystemExit("failed to apply BSDEthernetTap addIp reconcile hotfix")
-
-if "_haikuManagedV6Ips.erase(" not in bsd_text:
-    bsd_del_old = """\t\t\telse if (ip.isV6()) {\n\t\t\t\t_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());\n\t\t\t}\n"""
-    bsd_del_new = """\t\t\telse if (ip.isV6()) {\n\t\t\t\t_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());\n\t\t\t\tif (_dev.compare(0, 4, \"tap/\") == 0) {\n\t\t\t\t\t_haikuManagedV6Ips.erase(\n\t\t\t\t\t\tstd::remove_if(\n\t\t\t\t\t\t\t_haikuManagedV6Ips.begin(),\n\t\t\t\t\t\t\t_haikuManagedV6Ips.end(),\n\t\t\t\t\t\t\t[ip](const InetAddress& candidate) {\n\t\t\t\t\t\t\t\treturn candidate.ipOnly() == ip.ipOnly();\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t_haikuManagedV6Ips.end());\n\t\t\t\t\t___haikuAdjustIpv6OnLinkRoute(\"delete\", _dev, ip);\n\t\t\t\t\t___haikuReconcileIpv6Routes(_dev, _haikuManagedV6Ips);\n\t\t\t\t}\n\t\t\t}\n"""
-    bsd_text = replace_once(bsd_text, bsd_del_old, bsd_del_new, "BSDEthernetTap removeIp hotfix")
-
-if "_haikuManagedV6Ips.erase(" not in bsd_text:
-    raise SystemExit("failed to apply BSDEthernetTap removeIp reconcile hotfix")
-
-if "___haikuFindTapBySourceV6" not in bsd_text:
-    reroute_anchor_old = """static const ZeroTier::MAC ___broadcastMac((uint64_t)0xffffffffffffULL);\n"""
-    reroute_anchor_new = """static const ZeroTier::MAC ___broadcastMac((uint64_t)0xffffffffffffULL);\nstatic Mutex ___haikuV6OwnerLock;\nstatic std::map<std::string,BSDEthernetTap*> ___haikuTapByV6Source;\n\nstatic inline std::string ___haikuV6SourceKey(const void* raw)\n{\n\treturn std::string(reinterpret_cast<const char*>(raw), 16);\n}\n\nstatic void ___haikuRegisterTapSourceV6(BSDEthernetTap* tap,const InetAddress& ip)\n{\n\tif ((! tap) || (! ip.isV6()))\n\t\treturn;\n\tMutex::Lock _l(___haikuV6OwnerLock);\n\t___haikuTapByV6Source[___haikuV6SourceKey(ip.rawIpData())] = tap;\n}\n\nstatic void ___haikuUnregisterTapSourceV6(BSDEthernetTap* tap,const InetAddress& ip)\n{\n\tif ((! tap) || (! ip.isV6()))\n\t\treturn;\n\tMutex::Lock _l(___haikuV6OwnerLock);\n\tstd::map<std::string,BSDEthernetTap*>::iterator it = ___haikuTapByV6Source.find(___haikuV6SourceKey(ip.rawIpData()));\n\tif ((it != ___haikuTapByV6Source.end()) && (it->second == tap)) {\n\t\t___haikuTapByV6Source.erase(it);\n\t}\n}\n\nstatic void ___haikuUnregisterTapSources(BSDEthernetTap* tap)\n{\n\tif (! tap)\n\t\treturn;\n\tMutex::Lock _l(___haikuV6OwnerLock);\n\tfor (std::map<std::string,BSDEthernetTap*>::iterator it = ___haikuTapByV6Source.begin(); it != ___haikuTapByV6Source.end();) {\n\t\tif (it->second == tap) {\n\t\t\tit = ___haikuTapByV6Source.erase(it);\n\t\t}\n\t\telse {\n\t\t\t++it;\n\t\t}\n\t}\n}\n\nstatic BSDEthernetTap* ___haikuFindTapBySourceV6(const void* raw)\n{\n\tMutex::Lock _l(___haikuV6OwnerLock);\n\tstd::map<std::string,BSDEthernetTap*>::const_iterator it = ___haikuTapByV6Source.find(___haikuV6SourceKey(raw));\n\treturn (it == ___haikuTapByV6Source.end()) ? (BSDEthernetTap*)0 : it->second;\n}\n"""
-    bsd_text = replace_once(bsd_text, reroute_anchor_old, reroute_anchor_new, "BSDEthernetTap IPv6 source owner registry")
-
-if "___haikuUnregisterTapSources(this);" not in bsd_text:
-    destructor_old = """BSDEthernetTap::~BSDEthernetTap()\n{\n"""
-    destructor_new = """BSDEthernetTap::~BSDEthernetTap()\n{\n#ifdef __HAIKU__\n\t___haikuUnregisterTapSources(this);\n#endif\n"""
-    bsd_text = replace_once(bsd_text, destructor_old, destructor_new, "BSDEthernetTap destructor hotfix")
-
-if "___haikuRegisterTapSourceV6(this, ip.ipOnly());" not in bsd_text:
-    register_old = """\t\t\t\t\t_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());\n\t\t\t\t\t_haikuLocalV6Ips.push_back(ip.ipOnly());\n"""
-    register_new = """\t\t\t\t\t_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());\n\t\t\t\t\t_haikuLocalV6Ips.push_back(ip.ipOnly());\n\t\t\t\t\t___haikuRegisterTapSourceV6(this, ip.ipOnly());\n"""
-    bsd_text = replace_once(bsd_text, register_old, register_new, "BSDEthernetTap IPv6 source registration")
-
-if "___haikuUnregisterTapSourceV6(this, ip.ipOnly());" not in bsd_text:
-    unregister_old = """\t\t\telse if (ip.isV6()) {\n\t\t\t\t_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());\n"""
-    unregister_new = """\t\t\telse if (ip.isV6()) {\n\t\t\t\t___haikuUnregisterTapSourceV6(this, ip.ipOnly());\n\t\t\t\t_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());\n"""
-    bsd_text = replace_once(bsd_text, unregister_old, unregister_new, "BSDEthernetTap IPv6 source unregistration")
-
-if "HAIKU TAP REROUTE" not in bsd_text:
-    reroute_pattern = re.compile(
-        r'(\t+else if \(etherType == ZT_ETHERTYPE_IPV6\) \{\n'
-        r'\t+___haikuRewriteNdPayloadMacs\(reinterpret_cast<uint8_t\*>\(b \+ 14\), r - 14, _nativeMac, _ztMac\);\n'
-        r'\t+\}\n'
-        r'\t+\}\n)'
-        r'(#endif\n\t+if \(! handled\) \{\n)',
-        re.MULTILINE)
-    reroute_insertion = """\t\t\t\tif ((! handled) && (etherType == ZT_ETHERTYPE_IPV6) && (_dev.compare(0, 4, "tap/") == 0) && ((r - 14) >= 40)) {\n\t\t\t\t\tconst uint8_t* ipv6 = reinterpret_cast<const uint8_t*>(b + 14);\n\t\t\t\t\tBSDEthernetTap* owner = ___haikuFindTapBySourceV6(ipv6 + 8);\n\t\t\t\t\tif (owner && (owner != this)) {\n\t\t\t\t\t\tchar srcIpStr[INET6_ADDRSTRLEN];\n\t\t\t\t\t\tMAC rerouteFrom(from);\n\t\t\t\t\t\tif ((rerouteFrom == _nativeMac) || (rerouteFrom == _ztMac)) {\n\t\t\t\t\t\t\trerouteFrom = owner->_ztMac;\n\t\t\t\t\t\t}\n\t\t\t\t\t\tfprintf(stderr, "HAIKU TAP REROUTE src=%s fromdev=%s todev=%s" ZT_EOL_S, inet_ntop(AF_INET6, ipv6 + 8, srcIpStr, sizeof(srcIpStr)), _dev.c_str(), owner->_dev.c_str());\n\t\t\t\t\t\tfflush(stderr);\n\t\t\t\t\t\towner->_handler(owner->_arg, (void*)0, owner->_nwid, rerouteFrom, to, etherType, 0, (const void*)(b + 14), r - 14);\n\t\t\t\t\t\thandled = true;\n\t\t\t\t\t}\n\t\t\t\t}\n"""
-    bsd_text, reroute_count = reroute_pattern.subn(lambda m: m.group(1) + reroute_insertion + m.group(2), bsd_text, count=1)
-    if reroute_count != 1:
-        raise SystemExit("unable to apply BSDEthernetTap IPv6 reroute hotfix")
-
-bsd_path.write_text(bsd_text)
-PY
+	[ -f "$HOTFIX_SCRIPT_PATH" ] || fail "missing incremental hotfix script: $HOTFIX_SCRIPT_PATH"
+	python3 "$HOTFIX_SCRIPT_PATH" "$BUILD_ROOT"
 }
 
 prepare_source_tree() {
@@ -569,8 +1082,6 @@ prepare_source_tree() {
 		mkdir -p "$BUILD_ROOT"
 		tar -C "$LOCAL_SRC_DIR" -cf - . | tar -C "$BUILD_ROOT" -xf -
 	else
-		[ -r "$SELF_PATH" ] || fail "cannot read installer itself: $SELF_PATH"
-
 		log "downloading source archive: $SOURCE_URL"
 		curl -L --fail -o "$ARCHIVE_PATH" "$SOURCE_URL"
 
@@ -579,8 +1090,8 @@ prepare_source_tree() {
 		tar -C "$WORK_ROOT" -xf "$ARCHIVE_PATH"
 		[ -d "$BUILD_ROOT" ] || fail "extracted source directory missing: $BUILD_ROOT"
 
-		log "extracting embedded Haiku patch"
-		write_embedded_patch
+		log "copying Haiku patch asset"
+		write_patch_asset
 
 		log "applying Haiku patch"
 		patch -p1 -d "$BUILD_ROOT" < "$PATCH_PATH"
@@ -615,8 +1126,11 @@ skip { next }
 	cat >>"$tmp_bootscript" <<EOF
 
 $BOOT_MARKER_BEGIN
+if ! ps | grep '/boot/system/non-packaged/bin/public-net-watchdog.sh' | grep -v grep >/dev/null 2>&1; then
+	/bin/sh /boot/system/non-packaged/bin/public-net-watchdog.sh >/tmp/public-net-watchdog-run.out 2>/tmp/public-net-watchdog-run.err </dev/null &
+fi
 if ! ps | grep '/boot/system/non-packaged/bin/zerotier-one' | grep -v grep >/dev/null 2>&1; then
-	/bin/sh /boot/system/non-packaged/bin/zerotier-boot-start.sh >/tmp/zerotier-boot-start-run.out 2>/tmp/zerotier-boot-start-run.err </dev/null &
+	/bin/sh /boot/system/non-packaged/bin/zerotier-launch.sh >/tmp/zerotier-boot-start-run.out 2>/tmp/zerotier-boot-start-run.err </dev/null &
 fi
 $BOOT_MARKER_END
 EOF
@@ -657,23 +1171,25 @@ start_and_verify() {
 }
 
 main() {
+	local sshd_reload_required=0
+
 	[ "$(uname -s)" = "Haiku" ] || fail "this script must run on Haiku"
 
 	need_cmd awk
-	need_cmd base64
 	need_cmd curl
 	need_cmd gcc
 	need_cmd g++
 	need_cmd grep
-	need_cmd gzip
 	need_cmd ifconfig
 	need_cmd make
 	need_cmd nc
 	need_cmd patch
 	need_cmd ps
+	need_cmd python3
 	need_cmd sed
 	need_cmd tar
 
+	download_release_assets
 	prepare_source_tree
 
 	log "building zerotier-one"
@@ -684,12 +1200,38 @@ main() {
 	log "writing runtime configuration"
 	write_local_conf
 
-	log "installing boot helper"
+	log "installing boot helpers"
+	reuse_existing_runtime_tuning
 	write_boot_helper
+	write_public_net_watchdog
+	write_launch_helper
 	write_keepalive_helper
+	cleanup_legacy_client_family_wrappers
+
+	resolve_family_policy_mode
+	if [ "$NET_FAMILY_POLICY_MODE" = "yes" ]; then
+		log "installing global network family policy fix"
+		write_family_policy_refresh_helper
+		write_family_policy_preload_library
+		install_shell_family_policy
+		write_desktop_family_policy
+		install_sshd_family_policy
+		sshd_reload_required=1
+	else
+		log "skipping global network family policy fix"
+		if sshd_family_policy_present; then
+			sshd_reload_required=1
+		fi
+		remove_family_policy_artifacts
+	fi
 
 	log "registering boot autostart"
 	register_boot_autostart
+
+	if [ "$sshd_reload_required" -eq 1 ]; then
+		log "reloading sshd listener"
+		restart_sshd_listener
+	fi
 
 	log "cleaning previous runtime state"
 	cleanup_running_zerotier
@@ -704,247 +1246,3 @@ main() {
 
 main "$@"
 exit 0
-
-: <<'__ZT_HAIKU_PATCH_ARCHIVE__'
-__ZT_HAIKU_PATCH_BEGIN__
-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
-UUEru/8/LV9TuiLPAAA=
-__ZT_HAIKU_PATCH_END__
-__ZT_HAIKU_PATCH_ARCHIVE__

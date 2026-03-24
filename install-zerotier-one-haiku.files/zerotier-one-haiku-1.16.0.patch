@@ -1,0 +1,1689 @@
+diff -ruN a/Makefile b/Makefile
+--- a/Makefile	2025-09-12 02:52:09.000000000 +0900
++++ b/Makefile	2026-03-19 21:43:36.975995508 +0900
+@@ -27,6 +27,10 @@
+ 	include make-netbsd.mk
+ endif
+ 
++ifeq ($(OSTYPE),Haiku)
++	include make-haiku.mk
++endif
++
+ drone:
+ 	@echo "rendering .drone.yaml from .drone.jsonnet"
+ 	drone jsonnet --format --stream
+diff -ruN a/include/ZeroTierDebug.h b/include/ZeroTierDebug.h
+--- a/include/ZeroTierDebug.h	2025-09-12 02:52:09.000000000 +0900
++++ b/include/ZeroTierDebug.h	2026-03-19 21:43:36.976995515 +0900
+@@ -61,6 +61,9 @@
+ #ifdef __FreeBSD__
+ #define ZT_THREAD_ID (long)0   // (long)gettid()
+ #endif
++#ifdef __HAIKU__
++#define ZT_THREAD_ID (long)0
++#endif
+ #ifdef _WIN32
+ #define ZT_THREAD_ID (long)0   //
+ #endif
+@@ -79,7 +82,7 @@
+ #if defined(_WIN32)
+ #define DEBUG_INFO(fmt, ...) fprintf(stderr, ZT_GRN "INFO [%ld]: %17s:%5d:%25s: " fmt "\n" ZT_RESET, ZT_THREAD_ID, ZT_FILENAME, __LINE__, __FUNCTION__, __VA_ARGS__)
+ #endif
+-#if defined(__linux__) or defined(__APPLE__) or defined(__FreeBSD__)
++#if defined(__linux__) or defined(__APPLE__) or defined(__FreeBSD__) or defined(__HAIKU__)
+ #define DEBUG_INFO(fmt, args...) fprintf(stderr, ZT_GRN "INFO [%ld]: %17s:%5d:%25s: " fmt "\n" ZT_RESET, ZT_THREAD_ID, ZT_FILENAME, __LINE__, __FUNCTION__, ##args)
+ #endif
+ #else
+diff -ruN a/make-haiku.mk b/make-haiku.mk
+--- a/make-haiku.mk	1970-01-01 09:00:00.000000000 +0900
++++ b/make-haiku.mk	2026-03-20 00:04:39.981571692 +0900
+@@ -0,0 +1,112 @@
++# Haiku build rules
++
++INCLUDES=-isystem ext -Iext/prometheus-cpp-lite-1.0/core/include -Iext/prometheus-cpp-lite-1.0/simpleapi/include -Iext/opentelemetry-cpp-api-only/include
++DEFS=-D_DEFAULT_SOURCE
++LIBS=-lnetwork
++
++include objects.mk
++ONE_OBJS+=osdep/Arp.o osdep/BSDEthernetTap.o ext/http-parser/http_parser.o
++
++ifeq ($(ZT_CONTROLLER),1)
++	ZT_NONFREE=1
++endif
++ifeq ($(ZT_NONFREE),1)
++	include objects-nonfree.mk
++	ONE_OBJS+=$(CONTROLLER_OBJS)
++	override DEFS += -DZT_NONFREE_CONTROLLER
++endif
++
++ifeq ($(ZT_SANITIZE),1)
++	SANFLAGS+=-fsanitize=address -DASAN_OPTIONS=symbolize=1
++endif
++
++ifeq ($(ZT_DEBUG),1)
++	CFLAGS+=-Wall -g -pthread $(INCLUDES) $(DEFS)
++	LDFLAGS+=
++	STRIP=echo
++	ZT_TRACE=1
++node/Salsa20.o node/SHA512.o node/C25519.o node/Poly1305.o: CFLAGS = -Wall -O2 -g -pthread $(INCLUDES) $(DEFS)
++else
++	CFLAGS?=-O3
++	CFLAGS+=-Wall -fvisibility=hidden -pthread $(INCLUDES) -DNDEBUG $(DEFS)
++	LDFLAGS+=
++	STRIP=strip --strip-all
++endif
++
++ifeq ($(ZT_TRACE),1)
++	DEFS+=-DZT_TRACE
++endif
++
++CC_MACH=$(shell $(CC) -dumpmachine | cut -d '-' -f 1)
++ZT_ARCHITECTURE=999
++ifeq ($(CC_MACH),x86_64)
++	ZT_ARCHITECTURE=2
++	ZT_USE_X64_ASM_SALSA2012=1
++endif
++ifeq ($(CC_MACH),amd64)
++	ZT_ARCHITECTURE=2
++	ZT_USE_X64_ASM_SALSA2012=1
++endif
++ifeq ($(ZT_ARCHITECTURE),999)
++ERR=$(error FATAL: architecture could not be determined from $(CC) -dumpmachine: $(CC_MACH))
++.PHONY: err
++err: ; $(ERR)
++endif
++
++ifeq ($(ZT_USE_X64_ASM_SALSA2012),1)
++	override DEFS+=-DZT_USE_X64_ASM_SALSA2012
++	override CORE_OBJS+=ext/x64-salsa2012-asm/salsa2012.o
++endif
++
++override DEFS+=-DZT_BUILD_PLATFORM=10 -DZT_BUILD_ARCHITECTURE=$(ZT_ARCHITECTURE) -DZT_SOFTWARE_UPDATE_DEFAULT="\"disable\""
++
++CXXFLAGS+=$(CFLAGS) -std=c++17
++
++all: one
++
++one: $(CORE_OBJS) $(ONE_OBJS) one.o
++	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o zerotier-one $(CORE_OBJS) $(ONE_OBJS) one.o $(LIBS)
++	$(STRIP) zerotier-one
++	ln -sf zerotier-one zerotier-idtool
++	ln -sf zerotier-one zerotier-cli
++
++zerotier-one: one
++
++zerotier-idtool: one
++
++zerotier-cli: one
++
++libzerotiercore.a: $(CORE_OBJS)
++	ar rcs libzerotiercore.a $(CORE_OBJS)
++	ranlib libzerotiercore.a
++
++core: libzerotiercore.a
++
++selftest: $(CORE_OBJS) $(ONE_OBJS) selftest.o
++	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o zerotier-selftest selftest.o $(CORE_OBJS) $(ONE_OBJS) $(LIBS)
++	$(STRIP) zerotier-selftest
++
++zerotier-selftest: selftest
++
++clean:
++	rm -rf *.a *.o node/*.o nonfree/controller/*.o osdep/*.o service/*.o ext/http-parser/*.o build-* zerotier-one zerotier-idtool zerotier-selftest zerotier-cli $(ONE_OBJS) $(CORE_OBJS)
++
++debug: FORCE
++	$(MAKE) -j ZT_DEBUG=1
++
++install: one
++	mkdir -p $(DESTDIR)/boot/system/non-packaged/bin
++	mkdir -p $(DESTDIR)/boot/system/non-packaged/var/lib/zerotier-one
++	rm -f $(DESTDIR)/boot/system/non-packaged/bin/zerotier-one
++	cp zerotier-one $(DESTDIR)/boot/system/non-packaged/bin/zerotier-one
++	rm -f $(DESTDIR)/boot/system/non-packaged/bin/zerotier-cli
++	rm -f $(DESTDIR)/boot/system/non-packaged/bin/zerotier-idtool
++	ln -s zerotier-one $(DESTDIR)/boot/system/non-packaged/bin/zerotier-cli
++	ln -s zerotier-one $(DESTDIR)/boot/system/non-packaged/bin/zerotier-idtool
++
++uninstall: FORCE
++	rm -f $(DESTDIR)/boot/system/non-packaged/bin/zerotier-one
++	rm -f $(DESTDIR)/boot/system/non-packaged/bin/zerotier-cli
++	rm -f $(DESTDIR)/boot/system/non-packaged/bin/zerotier-idtool
++
++FORCE:
+diff -ruN a/node/Constants.hpp b/node/Constants.hpp
+--- a/node/Constants.hpp	2025-09-12 02:52:09.000000000 +0900
++++ b/node/Constants.hpp	2026-03-19 21:43:36.976995515 +0900
+@@ -52,6 +52,22 @@
+ #endif
+ #endif
+ 
++#if defined(__HAIKU__)
++#ifndef __UNIX_LIKE__
++#define __UNIX_LIKE__
++#endif
++#include <endian.h>
++#ifndef __BYTE_ORDER
++#define __BYTE_ORDER __BYTE_ORDER__
++#endif
++#ifndef __LITTLE_ENDIAN
++#define __LITTLE_ENDIAN __ORDER_LITTLE_ENDIAN__
++#endif
++#ifndef __BIG_ENDIAN
++#define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
++#endif
++#endif
++
+ #ifdef __APPLE__
+ #ifdef ZT_SSO_SUPPORTED
+ #define ZT_SSO_ENABLED 1
+@@ -208,6 +224,8 @@
+ #define ZT_PLATFORM_NAME "android"	 // Android (implies Linux, so it must come first)
+ #elif defined(__linux__)
+ #define ZT_PLATFORM_NAME "linux"   // Debian, Ubuntu, Gentoo, Fedora, openSUSE, RedHat, Centos and other
++#elif defined(__HAIKU__)
++#define ZT_PLATFORM_NAME "haiku"
+ #elif defined(__unix__) || ! defined(__APPLE__) && defined(__MACH__)
+ #include <sys/param.h>
+ #if defined(BSD)
+diff -ruN a/one.cpp b/one.cpp
+--- a/one.cpp	2025-09-12 02:52:09.000000000 +0900
++++ b/one.cpp	2026-03-19 22:03:28.520005300 +0900
+@@ -2105,9 +2105,15 @@
+ #ifdef __UNIX_LIKE__
+ 	signal(SIGHUP, &_sighandlerHup);
+ 	signal(SIGPIPE, SIG_IGN);
++#ifdef SIGIO
+ 	signal(SIGIO, SIG_IGN);
++#endif
++#ifdef SIGUSR1
+ 	signal(SIGUSR1, SIG_IGN);
++#endif
++#ifdef SIGUSR2
+ 	signal(SIGUSR2, SIG_IGN);
++#endif
+ 	signal(SIGALRM, &_sighandlerReallyQuit);
+ 	signal(SIGINT, &_sighandlerQuit);
+ 	signal(SIGTERM, &_sighandlerQuit);
+diff -ruN a/osdep/BSDEthernetTap.cpp b/osdep/BSDEthernetTap.cpp
+--- a/osdep/BSDEthernetTap.cpp	2025-09-12 02:52:09.000000000 +0900
++++ b/osdep/BSDEthernetTap.cpp	2026-03-20 21:57:10.313549854 +0900
+@@ -9,7 +9,9 @@
+ #include "BSDEthernetTap.hpp"
+ 
+ #include "../node/Constants.hpp"
++#include "../node/Identity.hpp"
+ #include "../node/Mutex.hpp"
++#include "../node/Switch.hpp"
+ #include "../node/Utils.hpp"
+ #include "OSUtils.hpp"
+ 
+@@ -20,15 +22,20 @@
+ #include <ifaddrs.h>
+ #include <map>
+ #include <net/if.h>
++#ifndef __HAIKU__
+ #include <net/if_arp.h>
++#endif
+ #include <net/if_dl.h>
+ #include <net/if_media.h>
+ #include <net/route.h>
+ #include <netinet/in.h>
++#ifndef __HAIKU__
+ #include <pthread_np.h>
++#endif
+ #include <sched.h>
+ #include <set>
+ #include <signal.h>
++#include <sstream>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -37,6 +44,9 @@
+ #include <sys/cdefs.h>
+ #include <sys/ioctl.h>
+ #include <sys/param.h>
++#ifdef __HAIKU__
++#include <sys/sockio.h>
++#endif
+ #include <sys/select.h>
+ #include <sys/socket.h>
+ #include <sys/stat.h>
+@@ -54,6 +64,399 @@
+ 
+ namespace ZeroTier {
+ 
++#ifdef __HAIKU__
++static const ZeroTier::MAC ___broadcastMac((uint64_t)0xffffffffffffULL);
++
++static inline bool ___inetAddressEqualsRaw(const InetAddress& ip, const void* raw, unsigned int len)
++{
++	return (ip && ((ip.isV4() && (len == 4)) || (ip.isV6() && (len == 16))) && (! memcmp(ip.rawIpData(), raw, len)));
++}
++
++static inline MAC ___ipv4MulticastToMac(const uint8_t* ip)
++{
++	uint8_t mac[6] = { 0x01, 0x00, 0x5e, (uint8_t)(ip[1] & 0x7f), ip[2], ip[3] };
++	return MAC(mac, 6);
++}
++
++static inline MAC ___ipv6MulticastToMac(const uint8_t* ip)
++{
++	uint8_t mac[6] = { 0x33, 0x33, ip[12], ip[13], ip[14], ip[15] };
++	return MAC(mac, 6);
++}
++
++static inline const char* ___haikuIpv4ToString(uint32_t ip, char buf[INET_ADDRSTRLEN])
++{
++	if (! inet_ntop(AF_INET, &ip, buf, INET_ADDRSTRLEN)) {
++		OSUtils::ztsnprintf(buf, INET_ADDRSTRLEN, "0.0.0.0");
++	}
++	return buf;
++}
++
++static inline const char* ___haikuRawIpv4ToString(const uint8_t* ip, char buf[INET_ADDRSTRLEN])
++{
++	if (! ip || ! inet_ntop(AF_INET, ip, buf, INET_ADDRSTRLEN)) {
++		OSUtils::ztsnprintf(buf, INET_ADDRSTRLEN, "0.0.0.0");
++	}
++	return buf;
++}
++
++static inline uint16_t ___checksum(const void* data, unsigned int len)
++{
++	const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
++	uint32_t sum = 0;
++	while (len > 1) {
++		sum += (uint32_t)((p[0] << 8) | p[1]);
++		p += 2;
++		len -= 2;
++	}
++	if (len) {
++		sum += (uint32_t)(p[0] << 8);
++	}
++	while (sum >> 16) {
++		sum = (sum & 0xffff) + (sum >> 16);
++	}
++	return (uint16_t)(~sum);
++}
++
++static inline uint16_t ___icmpv6Checksum(const uint8_t* src, const uint8_t* dst, const uint8_t* payload, unsigned int payloadLen)
++{
++	if (payloadLen > 256) {
++		return 0;
++	}
++	uint8_t pseudo[40 + 256];
++	memset(pseudo, 0, sizeof(pseudo));
++	memcpy(pseudo, src, 16);
++	memcpy(pseudo + 16, dst, 16);
++	pseudo[35] = (uint8_t)(payloadLen & 0xff);
++	pseudo[34] = (uint8_t)((payloadLen >> 8) & 0xff);
++	pseudo[39] = 58;
++	memcpy(pseudo + 40, payload, payloadLen);
++	return ___checksum(pseudo, 40 + payloadLen);
++}
++
++static bool ___haikuFindMatchingLocalV6(const std::vector<InetAddress>& localIps, const uint8_t* targetIp, InetAddress& found)
++{
++	for (std::vector<InetAddress>::const_iterator i(localIps.begin()); i != localIps.end(); ++i) {
++		if (i->isV6() && ___inetAddressEqualsRaw(*i, targetIp, 16)) {
++			found = *i;
++			return true;
++		}
++	}
++	return false;
++}
++
++static MAC ___haikuOutgoingDestMac(unsigned int etherType, const uint8_t* packet, unsigned int len)
++{
++	if ((etherType == ZT_ETHERTYPE_IPV4) && (len >= 20)) {
++		const uint8_t* dst = packet + 16;
++		if (dst[0] >= 224 && dst[0] <= 239) {
++			return ___ipv4MulticastToMac(dst);
++		}
++		return ___broadcastMac;
++	}
++	if ((etherType == ZT_ETHERTYPE_IPV6) && (len >= 40)) {
++		const uint8_t* dst = packet + 24;
++		if (dst[0] == 0xff) {
++			return ___ipv6MulticastToMac(dst);
++		}
++		return ___broadcastMac;
++	}
++	return MAC();
++}
++
++static bool ___haikuBuildNeighborAdvertisement(const uint8_t* localIp, const uint8_t* remoteIp, const MAC& localMac, uint8_t* response, unsigned int& responseLen)
++{
++	if ((! localIp) || (! remoteIp) || (! response)) {
++		responseLen = 0;
++		return false;
++	}
++
++	uint8_t* ipv6 = response;
++	memset(ipv6, 0, 72);
++	ipv6[0] = 0x60;
++	ipv6[5] = 32;
++	ipv6[6] = 58;
++	ipv6[7] = 255;
++	memcpy(ipv6 + 8, localIp, 16);
++	memcpy(ipv6 + 24, remoteIp, 16);
++
++	uint8_t* na = ipv6 + 40;
++	na[0] = 136;
++	na[4] = 0x60; // solicited + override
++	memcpy(na + 8, localIp, 16);
++	na[24] = 2;
++	na[25] = 1;
++	localMac.copyTo(na + 26, 6);
++
++	const uint16_t checksum = ___icmpv6Checksum(localIp, remoteIp, na, 32);
++	na[2] = (uint8_t)(checksum >> 8);
++	na[3] = (uint8_t)(checksum & 0xff);
++	responseLen = 72;
++	return true;
++}
++
++static void ___haikuRewriteArpPayloadMacs(uint8_t* packet, unsigned int len, const MAC& fromMac, const MAC& toMac)
++{
++	if ((! packet) || (len < 28) || (! fromMac) || (! toMac)) {
++		return;
++	}
++
++	if ((packet[0] != 0x00) || (packet[1] != 0x01) || (packet[2] != 0x08) || (packet[3] != 0x00) || (packet[4] != 0x06) || (packet[5] != 0x04)) {
++		return;
++	}
++
++	if (MAC(packet + 8, 6) == fromMac) {
++		toMac.copyTo(packet + 8, 6);
++	}
++	if (MAC(packet + 18, 6) == fromMac) {
++		toMac.copyTo(packet + 18, 6);
++	}
++}
++
++static void ___haikuRewriteNdPayloadMacs(uint8_t* packet, unsigned int len, const MAC& fromMac, const MAC& toMac)
++{
++	if ((! packet) || (len < 40) || (! fromMac) || (! toMac) || ((packet[0] >> 4) != 6) || (packet[6] != 58)) {
++		return;
++	}
++
++	const unsigned int payloadLen = (((unsigned int)packet[4]) << 8) | packet[5];
++	if ((payloadLen < 8) || ((40 + payloadLen) > len)) {
++		return;
++	}
++
++	uint8_t* icmpv6 = packet + 40;
++	const unsigned int icmpv6Len = payloadLen;
++	unsigned int optionsOffset = 0;
++	bool rewritten = false;
++
++	switch (icmpv6[0]) {
++		case 133:
++			optionsOffset = 8;
++			break;
++		case 134:
++			optionsOffset = 16;
++			break;
++		case 135:
++		case 136:
++			optionsOffset = 24;
++			break;
++		case 137:
++			optionsOffset = 40;
++			break;
++		default:
++			return;
++	}
++
++	while ((optionsOffset + 2) <= icmpv6Len) {
++		uint8_t* option = icmpv6 + optionsOffset;
++		const unsigned int optionLen = ((unsigned int)option[1]) * 8;
++		if ((optionLen < 8) || ((optionsOffset + optionLen) > icmpv6Len)) {
++			break;
++		}
++		if (((option[0] == 1) || (option[0] == 2)) && (optionLen >= 8) && (MAC(option + 2, 6) == fromMac)) {
++			toMac.copyTo(option + 2, 6);
++			rewritten = true;
++		}
++		optionsOffset += optionLen;
++	}
++
++	if (rewritten) {
++		const uint8_t* srcIp = packet + 8;
++		const uint8_t* dstIp = packet + 24;
++		icmpv6[2] = 0;
++		icmpv6[3] = 0;
++		const uint16_t checksum = ___icmpv6Checksum(srcIp, dstIp, icmpv6, icmpv6Len);
++		icmpv6[2] = (uint8_t)(checksum >> 8);
++		icmpv6[3] = (uint8_t)(checksum & 0xff);
++	}
++}
++
++static inline bool ___haikuIsArpRequest(const uint8_t* packet, unsigned int len)
++{
++	return (packet && (len >= 28) && (packet[0] == 0x00) && (packet[1] == 0x01) && (packet[2] == 0x08) && (packet[3] == 0x00) && (packet[4] == 0x06) && (packet[5] == 0x04) && (packet[6] == 0x00) && (packet[7] == 0x01));
++}
++
++static inline bool ___haikuIsArpResponse(const uint8_t* packet, unsigned int len)
++{
++	return (packet && (len >= 28) && (packet[0] == 0x00) && (packet[1] == 0x01) && (packet[2] == 0x08) && (packet[3] == 0x00) && (packet[4] == 0x06) && (packet[5] == 0x04) && (packet[6] == 0x00) && (packet[7] == 0x02));
++}
++
++static MAC ___haikuZeroTierMacFromIdentityPath(const char* path, uint64_t nwid)
++{
++	if ((! path) || (! path[0])) {
++		return MAC();
++	}
++
++	std::string identity;
++	if ((! OSUtils::readFile(path, identity)) || identity.empty()) {
++		fprintf(stderr, "HAIKU TAP IDENTITY path=%s result=read-failed" ZT_EOL_S, path);
++		fflush(stderr);
++		return MAC();
++	}
++
++	while ((! identity.empty()) && ((identity[identity.length() - 1] == '\n') || (identity[identity.length() - 1] == '\r'))) {
++		identity.erase(identity.length() - 1);
++	}
++
++	Identity parsedIdentity;
++	if (parsedIdentity.fromString(identity.c_str())) {
++		MAC derived(parsedIdentity.address(), nwid);
++		char macBuf[18];
++		char addrBuf[11];
++		fprintf(stderr, "HAIKU TAP IDENTITY path=%s result=parsed addr=%s nwid=%.16llx mac=%s" ZT_EOL_S, path, parsedIdentity.address().toString(addrBuf), (unsigned long long)nwid, derived.toString(macBuf));
++		fflush(stderr);
++		return derived;
++	}
++
++	const char* sep = strchr(identity.c_str(), ':');
++	if (sep && ((sep - identity.c_str()) >= 10)) {
++		char addrHex[11];
++		memcpy(addrHex, identity.data(), 10);
++		addrHex[10] = 0;
++		MAC derived(Address(Utils::hexStrToU64(addrHex)), nwid);
++		char macBuf[18];
++		fprintf(stderr, "HAIKU TAP IDENTITY path=%s result=manual addr=%s nwid=%.16llx mac=%s" ZT_EOL_S, path, addrHex, (unsigned long long)nwid, derived.toString(macBuf));
++		fflush(stderr);
++		return derived;
++	}
++
++	fprintf(stderr, "HAIKU TAP IDENTITY path=%s result=parse-failed raw-prefix=%.10s" ZT_EOL_S, path, identity.c_str());
++	fflush(stderr);
++	return MAC();
++}
++
++static MAC ___haikuZeroTierMacFromIdentity(const char* homePath, uint64_t nwid)
++{
++	std::string identityPublicPath;
++	const char* candidatePaths[3] = {
++		"",
++		"/boot/system/non-packaged/var/lib/zerotier-one/identity.public",
++		"/boot/home/config/settings/zerotier-one/identity.public",
++	};
++
++	if (homePath && homePath[0]) {
++		identityPublicPath.assign(homePath);
++		identityPublicPath.append(ZT_PATH_SEPARATOR_S "identity.public");
++		candidatePaths[0] = identityPublicPath.c_str();
++	}
++
++	for (unsigned int i = 0; i < (sizeof(candidatePaths) / sizeof(candidatePaths[0])); ++i) {
++		MAC derived(___haikuZeroTierMacFromIdentityPath(candidatePaths[i], nwid));
++		if (derived) {
++			return derived;
++		}
++	}
++
++	return MAC();
++}
++#endif
++
++static bool ___getLinkLayerAddress(const std::string& dev, MAC& mac)
++{
++#ifdef __HAIKU__
++	std::string cmd("ifconfig ");
++	cmd.append(dev);
++	FILE* fp = ::popen(cmd.c_str(), "r");
++	if (! fp) {
++		return false;
++	}
++
++	bool found = false;
++	char line[512];
++	while (::fgets(line, sizeof(line), fp)) {
++		const char* marker = strstr(line, "Address: ");
++		if (! marker) {
++			continue;
++		}
++
++		unsigned int b[6];
++		if (::sscanf(marker + 9, "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6) {
++			uint8_t raw[6];
++			for (unsigned int i = 0; i < 6; ++i) {
++				raw[i] = (uint8_t)b[i];
++			}
++			mac.setTo(raw, 6);
++			found = true;
++			break;
++		}
++	}
++
++	::pclose(fp);
++	return found;
++#else
++	struct ifaddrs* ifa = (struct ifaddrs*)0;
++	if (getifaddrs(&ifa) != 0) {
++		return false;
++	}
++
++	bool found = false;
++	for (struct ifaddrs* p = ifa; p; p = p->ifa_next) {
++		if ((p->ifa_name == (char*)0) || (strcmp(p->ifa_name, dev.c_str()) != 0) || (p->ifa_addr == (struct sockaddr*)0) || (p->ifa_addr->sa_family != AF_LINK)) {
++			continue;
++		}
++
++		struct sockaddr_dl* sdl = (struct sockaddr_dl*)p->ifa_addr;
++		if (sdl->sdl_alen >= 6) {
++			mac.setTo(LLADDR(sdl), 6);
++			found = true;
++			break;
++		}
++	}
++
++	freeifaddrs(ifa);
++	return found;
++#endif
++}
++
++#ifdef __HAIKU__
++static bool ___haikuInterfaceHasAddress(const std::string& dev, const InetAddress& ip)
++{
++	char ipStr[128];
++	std::string want(ip.toIpString(ipStr));
++	std::string cmd("ifconfig ");
++	cmd.append(dev);
++	FILE* fp = ::popen(cmd.c_str(), "r");
++	if (! fp) {
++		return false;
++	}
++
++	bool found = false;
++	char line[512];
++	while (::fgets(line, sizeof(line), fp)) {
++		if (strstr(line, want.c_str())) {
++			found = true;
++			break;
++		}
++	}
++
++	::pclose(fp);
++	return found;
++}
++
++static void ___haikuEnsureIpv6MulticastRoute(const std::string& dev, const char* network, const char* prefixLen)
++{
++	long cpid = (long)vfork();
++	if (cpid == 0) {
++		::execlp("route", "route", "add", dev.c_str(), "inet6", network, "prefixlen", prefixLen, (const char*)0);
++		::_exit(-1);
++	}
++	else if (cpid > 0) {
++		int exitcode = -1;
++		::waitpid(cpid, &exitcode, 0);
++		fprintf(stderr, "HAIKU TAP ROUTE dev=%s net=%s/%s exit=%d" ZT_EOL_S, dev.c_str(), network, prefixLen, exitcode);
++		fflush(stderr);
++	}
++}
++
++static void ___haikuEnsureIpv6MulticastRoutes(const std::string& dev)
++{
++	// Haiku does not auto-install the multicast routes needed for IPv6 ND on tap devices.
++	// Without these, on-link IPv6 traffic fails with ENETUNREACH before any packet is emitted.
++	___haikuEnsureIpv6MulticastRoute(dev, "ff00::", "8");
++	___haikuEnsureIpv6MulticastRoute(dev, "ff02::", "16");
++}
++#endif
++
+ BSDEthernetTap::BSDEthernetTap(
+ 	const char* homePath,
+ 	unsigned int concurrency,
+@@ -70,9 +473,11 @@
+ 	, _pinning(pinning)
+ 	, _arg(arg)
+ 	, _nwid(nwid)
++	, _ztMac(mac)
++	, _nativeMac()
+ 	, _mtu(mtu)
+ 	, _metric(metric)
+-	, _fd(0)
++	, _fd(-1)
+ 	, _enabled(true)
+ 	, _lastIfAddrsUpdate(0)
+ {
+@@ -81,6 +486,12 @@
+ 
+ 	Mutex::Lock _gl(globalTapCreateLock);
+ 
++#ifdef __HAIKU__
++	if (! _concurrency) {
++		_concurrency = 1;
++	}
++#endif
++
+ #ifdef __FreeBSD__
+ 	/* FreeBSD allows long interface names and interface renaming */
+ 
+@@ -139,7 +550,7 @@
+ 					throw std::runtime_error("fork() failed");
+ 
+ 				_fd = ::open(devpath, O_RDWR);
+-				if (_fd > 0)
++				if (_fd >= 0)
+ 					break;
+ 				else
+ 					throw std::runtime_error("unable to open created tap device");
+@@ -149,21 +560,61 @@
+ 			}
+ 		}
+ 	}
+-#else
++	#else
++	#ifdef __HAIKU__
++		const char* prefixes[][2] = {
++			{"tap/%d", "/dev/tap/%d"},
++		};
++		for (unsigned int prefix = 0; prefix < (sizeof(prefixes) / sizeof(prefixes[0])); ++prefix) {
++			const int start = 0;
++			for (int i = start; i < 64; ++i) {
++				OSUtils::ztsnprintf(tmpdevname, sizeof(tmpdevname), prefixes[prefix][0], i);
++				long cpid = (long)vfork();
++				if (cpid == 0) {
++					::execlp("ifconfig", "ifconfig", tmpdevname, "up", (const char*)0);
++					::_exit(-1);
++				}
++				else if (cpid > 0) {
++					int exitcode = -1;
++					::waitpid(cpid, &exitcode, 0);
++					if (exitcode != 0) {
++						continue;
++					}
++				}
++
++				OSUtils::ztsnprintf(devpath, sizeof(devpath), prefixes[prefix][1], i);
++				for (int openAttempt = 0; openAttempt < 40; ++openAttempt) {
++					_fd = ::open(devpath, O_RDWR);
++					if (_fd >= 0) {
++						_dev = tmpdevname;
++						break;
++					}
++					Thread::sleep(50);
++				}
++				if (_fd >= 0) {
++					break;
++				}
++			}
++			if (_fd >= 0) {
++				break;
++			}
++		}
++	#else
+ 	/* Other BSDs like OpenBSD only have a limited number of tap devices that cannot be renamed */
+ 
+ 	for (int i = 0; i < 64; ++i) {
+ 		OSUtils::ztsnprintf(tmpdevname, sizeof(tmpdevname), "tap%d", i);
+ 		OSUtils::ztsnprintf(devpath, sizeof(devpath), "/dev/%s", tmpdevname);
+ 		_fd = ::open(devpath, O_RDWR);
+-		if (_fd > 0) {
++		if (_fd >= 0) {
+ 			_dev = tmpdevname;
+ 			break;
+ 		}
+ 	}
+ #endif
++#endif
+ 
+-	if (_fd <= 0)
++	if (_fd < 0)
+ 		throw std::runtime_error("unable to open TAP device or no more devices available");
+ 
+ 	if (fcntl(_fd, F_SETFL, fcntl(_fd, F_GETFL) & ~O_NONBLOCK) == -1) {
+@@ -175,12 +626,41 @@
+ 	OSUtils::ztsnprintf(ethaddr, sizeof(ethaddr), "%.2x:%.2x:%.2x:%.2x:%.2x:%.2x", (int)mac[0], (int)mac[1], (int)mac[2], (int)mac[3], (int)mac[4], (int)mac[5]);
+ 	OSUtils::ztsnprintf(mtustr, sizeof(mtustr), "%u", _mtu);
+ 	OSUtils::ztsnprintf(metstr, sizeof(metstr), "%u", _metric);
++	#ifdef __HAIKU__
++	{
++		int exitcode = -1;
++		bool activated = false;
++		for (int activateAttempt = 0; activateAttempt < 100; ++activateAttempt) {
++			long cpid = (long)vfork();
++			if (cpid == 0) {
++#ifdef ZT_TRACE
++				fprintf(stderr, "DEBUG: ifconfig %s mtu %s metric %s up" ZT_EOL_S, _dev.c_str(), mtustr, metstr);
++#endif
++				::execlp("ifconfig", "ifconfig", _dev.c_str(), "mtu", mtustr, "metric", metstr, "up", (const char*)0);
++				::_exit(-1);
++			}
++			else if (cpid > 0) {
++				exitcode = -1;
++				::waitpid(cpid, &exitcode, 0);
++				if (!exitcode) {
++					activated = true;
++					break;
++				}
++			}
++			Thread::sleep(50);
++		}
++		if (!activated) {
++			::close(_fd);
++			throw std::runtime_error("ifconfig failure setting link-layer address and activating tap interface");
++		}
++	}
++	#else
+ 	long cpid = (long)vfork();
+ 	if (cpid == 0) {
+ #ifdef ZT_TRACE
+-		fprintf(stderr, "DEBUG: ifconfig %s lladdr %s mtu %s metric %s up" ZT_EOL_S, _dev.c_str(), ethaddr, mtustr, metstr);
++		fprintf(stderr, "DEBUG: ifconfig %s mtu %s metric %s up" ZT_EOL_S, _dev.c_str(), mtustr, metstr);
+ #endif
+-		::execl("/sbin/ifconfig", "/sbin/ifconfig", _dev.c_str(), "lladdr", ethaddr, "mtu", mtustr, "metric", metstr, "up", (const char*)0);
++		::execlp("ifconfig", "ifconfig", _dev.c_str(), "lladdr", ethaddr, "mtu", mtustr, "metric", metstr, "up", (const char*)0);
+ 		::_exit(-1);
+ 	}
+ 	else if (cpid > 0) {
+@@ -191,13 +671,76 @@
+ 			throw std::runtime_error("ifconfig failure setting link-layer address and activating tap interface");
+ 		}
+ 	}
++	#endif
++
++#ifdef __HAIKU__
++	{
++		const int reopenedFd = ::open(devpath, O_RDWR);
++		if (reopenedFd >= 0) {
++			::close(_fd);
++			_fd = reopenedFd;
++		}
++	}
++#endif
+ 
+ 	// Set close-on-exec so that devices cannot persist if we fork/exec for update
+ 	fcntl(_fd, F_SETFD, fcntl(_fd, F_GETFD) | FD_CLOEXEC);
+ 
++	#ifdef __HAIKU__
++		const MAC requestedMac(mac);
++		MAC effectiveZtMac(_ztMac);
++		if (! effectiveZtMac) {
++			effectiveZtMac = requestedMac;
++		}
++		if (! effectiveZtMac) {
++			effectiveZtMac = ___haikuZeroTierMacFromIdentity(homePath, nwid);
++		}
++
++		char requestedMacStr[18];
++		char effectiveZtMacStr[18];
++		fprintf(stderr, "HAIKU TAP CONFIG dev=%s home=%s nwid=%.16llx requested=%s effective=%s" ZT_EOL_S, _dev.c_str(), (homePath ? homePath : "(null)"), (unsigned long long)nwid, requestedMac.toString(requestedMacStr), effectiveZtMac.toString(effectiveZtMacStr));
++		fflush(stderr);
++		_ztMac = effectiveZtMac;
++
++		if (_dev.compare(0, 4, "tap/") == 0) {
++			MAC nativeMac;
++			for (int attempt = 0; attempt < 40; ++attempt) {
++				if (___getLinkLayerAddress(_dev, nativeMac) && nativeMac) {
++					break;
++				}
++				Thread::sleep(50);
++			}
++			if (nativeMac) {
++				_nativeMac = nativeMac;
++			}
++			else {
++				_nativeMac = _ztMac;
++			}
++
++			if ((! _ztMac) && requestedMac) {
++				_ztMac = requestedMac;
++			}
++			if (! _ztMac) {
++				_ztMac = ___haikuZeroTierMacFromIdentity(homePath, nwid);
++			}
++
++			char nativeMacStr[18];
++			char ztMacStr[18];
++			fprintf(stderr, "HAIKU TAP INIT dev=%s home=%s native=%s zt=%s" ZT_EOL_S, _dev.c_str(), (homePath ? homePath : "(null)"), _nativeMac.toString(nativeMacStr), _ztMac.toString(ztMacStr));
++			fflush(stderr);
++		}
++		else {
++			_nativeMac = _ztMac;
++		}
++	#endif
++
+ 	::pipe(_shutdownSignalPipe);
+ 
++#ifdef __HAIKU__
++	_haikuMainThread = std::thread([this]() { this->threadMain(); });
++#else
+ 	_thread = Thread::start(this);
++#endif
+ }
+ 
+ BSDEthernetTap::~BSDEthernetTap()
+@@ -209,16 +752,26 @@
+ 	long cpid = (long)vfork();
+ 	if (cpid == 0) {
+ #ifdef ZT_TRACE
+-		fprintf(stderr, "DEBUG: ifconfig %s destroy" ZT_EOL_S, _dev.c_str());
++		fprintf(stderr, "DEBUG: ifconfig %s delete" ZT_EOL_S, _dev.c_str());
++#endif
++#ifdef __HAIKU__
++		::execlp("ifconfig", "ifconfig", "--delete", _dev.c_str(), (const char*)0);
++#else
++		::execlp("ifconfig", "ifconfig", _dev.c_str(), "destroy", (const char*)0);
+ #endif
+-		::execl("/sbin/ifconfig", "/sbin/ifconfig", _dev.c_str(), "destroy", (const char*)0);
+ 		::_exit(-1);
+ 	}
+ 	else if (cpid > 0) {
+ 		int exitcode = -1;
+ 		::waitpid(cpid, &exitcode, 0);
+ 	}
++#ifdef __HAIKU__
++	if (_haikuMainThread.joinable()) {
++		_haikuMainThread.join();
++	}
++#else
+ 	Thread::join(_thread);
++#endif
+ 	for (std::thread& t : _rxThreads) {
+ 		t.join();
+ 	}
+@@ -242,7 +795,16 @@
+ #ifdef ZT_TRACE
+ 		fprintf(stderr, "DEBUG: ifconfig %s inet %s -alias" ZT_EOL_S, _dev.c_str(), ip.toIpString(ipbuf));
+ #endif
+-		execl("/sbin/ifconfig", "/sbin/ifconfig", _dev.c_str(), "inet", ip.toIpString(ipbuf), "-alias", (const char*)0);
++#ifdef __HAIKU__
++			if (ip.isV4()) {
++				execlp("ifconfig", "ifconfig", _dev.c_str(), "inet", "0.0.0.0", "0.0.0.0", "up", (const char*)0);
++			}
++			else {
++				execlp("ifconfig", "ifconfig", _dev.c_str(), "inet6", "::", "prefixlen", "128", "up", (const char*)0);
++			}
++#else
++			execlp("ifconfig", "ifconfig", _dev.c_str(), "inet", ip.toIpString(ipbuf), "-alias", (const char*)0);
++#endif
+ 		_exit(-1);
+ 	}
+ 	else if (cpid > 0) {
+@@ -270,21 +832,89 @@
+ 		}
+ 	}
+ 
+-	long cpid = (long)vfork();
+-	if (cpid == 0) {
+-		char tmp[128];
++	const bool haikuTap = (_dev.compare(0, 4, "tap/") == 0);
++#ifdef __HAIKU__
++	const unsigned int maxAttempts = haikuTap ? 100 : 20;
++	const unsigned int retryDelayMs = haikuTap ? 200 : 100;
++#else
++	const unsigned int maxAttempts = 1;
++	const unsigned int retryDelayMs = 0;
++#endif
++
++	for (unsigned int attempt = 0;; ++attempt) {
++		long cpid = (long)vfork();
++		if (cpid == 0) {
++			char tmp[128];
+ #ifdef ZT_TRACE
+-		fprintf(stderr, "DEBUG: ifconfig %s %s %s alias" ZT_EOL_S, _dev.c_str(), ip.isV4() ? "inet" : "inet6", ip.toString(tmp));
++			fprintf(stderr, "DEBUG: ifconfig %s %s %s alias" ZT_EOL_S, _dev.c_str(), ip.isV4() ? "inet" : "inet6", ip.toString(tmp));
+ #endif
+-		::execl("/sbin/ifconfig", "/sbin/ifconfig", _dev.c_str(), ip.isV4() ? "inet" : "inet6", ip.toString(tmp), "alias", (const char*)0);
+-		::_exit(-1);
+-	}
+-	else if (cpid > 0) {
+-		int exitcode = -1;
+-		::waitpid(cpid, &exitcode, 0);
+-		return (exitcode == 0);
++#ifdef __HAIKU__
++			if (ip.isV4()) {
++				char ipbuf[64];
++				char maskbuf[64];
++				InetAddress mask = ip.netmask();
++				::execlp("ifconfig", "ifconfig", _dev.c_str(), "inet", ip.toIpString(ipbuf), mask.toIpString(maskbuf), "up", (const char*)0);
++			}
++			else {
++				char prefix[8];
++				OSUtils::ztsnprintf(prefix, sizeof(prefix), "%u", ip.netmaskBits());
++				::execlp("ifconfig", "ifconfig", _dev.c_str(), "inet6", ip.toIpString(tmp), "prefixlen", prefix, "up", (const char*)0);
++			}
++#else
++			::execlp("ifconfig", "ifconfig", _dev.c_str(), ip.isV4() ? "inet" : "inet6", ip.toString(tmp), "alias", (const char*)0);
++#endif
++			::_exit(-1);
++		}
++		else if (cpid > 0) {
++			int exitcode = -1;
++			::waitpid(cpid, &exitcode, 0);
++#ifdef __HAIKU__
++			char ipStr[128];
++			fprintf(stderr, "HAIKU TAP ADDIP dev=%s ip=%s attempt=%u/%u exit=%d" ZT_EOL_S, _dev.c_str(), ip.toString(ipStr), attempt + 1, maxAttempts, exitcode);
++			fflush(stderr);
++#endif
++			if (exitcode == 0) {
++#ifdef __HAIKU__
++				if (retryDelayMs) {
++					Thread::sleep(retryDelayMs);
++				}
++				const bool visible = haikuTap ? ___haikuInterfaceHasAddress(_dev, ip) : true;
++				char ipStr[128];
++				fprintf(stderr, "HAIKU TAP ADDIP dev=%s ip=%s attempt=%u/%u visible=%d" ZT_EOL_S, _dev.c_str(), ip.toString(ipStr), attempt + 1, maxAttempts, (int)visible);
++				fflush(stderr);
++				if (! visible) {
++					if ((attempt + 1) < maxAttempts) {
++						Thread::sleep(retryDelayMs ? retryDelayMs : 100);
++						continue;
++					}
++					return false;
++				}
++				Mutex::Lock _l(_haikuStateLock);
++				if (ip.isV4()) {
++					uint32_t ip4 = 0;
++					memcpy(&ip4, ip.rawIpData(), 4);
++					_haikuArp.addLocal(ip4, _ztMac);
++				}
++				else if (ip.isV6()) {
++					_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());
++					_haikuLocalV6Ips.push_back(ip.ipOnly());
++					if (haikuTap) {
++						___haikuEnsureIpv6MulticastRoutes(_dev);
++					}
++				}
++#endif
++				return true;
++			}
++#ifdef __HAIKU__
++			if ((attempt + 1) < maxAttempts) {
++				Thread::sleep(retryDelayMs ? retryDelayMs : 100);
++				continue;
++			}
++#endif
++			return false;
++		}
++		return false;
+ 	}
+-	return false;
+ }
+ 
+ bool BSDEthernetTap::removeIp(const InetAddress& ip)
+@@ -293,8 +923,20 @@
+ 		return false;
+ 	std::vector<InetAddress> allIps(ips());
+ 	if (std::find(allIps.begin(), allIps.end(), ip) != allIps.end()) {
+-		if (___removeIp(_dev, ip))
++		if (___removeIp(_dev, ip)) {
++#ifdef __HAIKU__
++			Mutex::Lock _l(_haikuStateLock);
++			if (ip.isV4()) {
++				uint32_t ip4 = 0;
++				memcpy(&ip4, ip.rawIpData(), 4);
++				_haikuArp.remove(ip4);
++			}
++			else if (ip.isV6()) {
++				_haikuLocalV6Ips.erase(std::remove(_haikuLocalV6Ips.begin(), _haikuLocalV6Ips.end(), ip.ipOnly()), _haikuLocalV6Ips.end());
++			}
++#endif
+ 			return true;
++		}
+ 	}
+ 	return false;
+ }
+@@ -348,12 +990,116 @@
+ 
+ void BSDEthernetTap::put(const MAC& from, const MAC& to, unsigned int etherType, const void* data, unsigned int len)
+ {
++#ifdef __HAIKU__
++	if ((_fd >= 0) && (len <= _mtu) && (_enabled) && (_dev.compare(0, 4, "tun/") == 0)) {
++		if (etherType == ZT_ETHERTYPE_ARP) {
++			uint8_t response[ZT_ARP_BUF_LENGTH];
++			unsigned int responseLen = 0;
++			MAC responseDest;
++			uint32_t learnedIp = 0;
++			{
++				Mutex::Lock _l(_haikuStateLock);
++				learnedIp = _haikuArp.processIncomingArp(data, len, response, responseLen, responseDest);
++			}
++			char responseDestStr[18];
++			char learnedIpStr[INET_ADDRSTRLEN];
++			fprintf(stderr, "HAIKU TUN ARP IN learned=%s responseLen=%u responseDest=%s" ZT_EOL_S, learnedIp ? ___haikuIpv4ToString(learnedIp, learnedIpStr) : "-", responseLen, responseDest.toString(responseDestStr));
++			fflush(stderr);
++			if (responseLen) {
++				_handler(_arg, (void*)0, _nwid, _ztMac, responseDest, ZT_ETHERTYPE_ARP, 0, response, responseLen);
++			}
++			return;
++		}
++
++		if ((etherType == ZT_ETHERTYPE_IPV6) && (len >= 72)) {
++			const uint8_t* pkt = reinterpret_cast<const uint8_t*>(data);
++			if (((pkt[0] >> 4) == 6) && (pkt[6] == 58) && (pkt[7] == 255) && (pkt[40] == 135)) {
++				const uint8_t* remoteIp = pkt + 8;
++				const uint8_t* targetIp = pkt + 48;
++				InetAddress localTarget;
++				uint8_t response[72];
++				unsigned int responseLen = 0;
++				bool shouldReply = false;
++				{
++					Mutex::Lock _l(_haikuStateLock);
++					shouldReply = ___haikuFindMatchingLocalV6(_haikuLocalV6Ips, targetIp, localTarget);
++				}
++				if (shouldReply && ___haikuBuildNeighborAdvertisement(reinterpret_cast<const uint8_t*>(localTarget.rawIpData()), remoteIp, _ztMac, response, responseLen)) {
++					_handler(_arg, (void*)0, _nwid, _ztMac, from, ZT_ETHERTYPE_IPV6, 0, response, responseLen);
++				}
++				return;
++			}
++		}
++
++		if ((etherType == ZT_ETHERTYPE_IPV4) || (etherType == ZT_ETHERTYPE_IPV6)) {
++			if ((etherType == ZT_ETHERTYPE_IPV4) && (len >= 20)) {
++				const uint8_t* pkt = reinterpret_cast<const uint8_t*>(data);
++				char srcIpStr[INET_ADDRSTRLEN];
++				char dstIpStr[INET_ADDRSTRLEN];
++				fprintf(stderr, "HAIKU TUN IP IN type=ipv4 src=%s dst=%s len=%u" ZT_EOL_S, ___haikuRawIpv4ToString(pkt + 12, srcIpStr), ___haikuRawIpv4ToString(pkt + 16, dstIpStr), len);
++			}
++			else if ((etherType == ZT_ETHERTYPE_IPV6) && (len >= 40)) {
++				fprintf(stderr, "HAIKU TUN IP IN type=ipv6 len=%u" ZT_EOL_S, len);
++			}
++			fflush(stderr);
++			::write(_fd, data, len);
++		}
++		return;
++	}
++#endif
++
+ 	char putBuf[ZT_MAX_MTU + 64];
+-	if ((_fd > 0) && (len <= _mtu) && (_enabled)) {
+-		to.copyTo(putBuf, 6);
+-		from.copyTo(putBuf + 6, 6);
++	if ((_fd >= 0) && (len <= _mtu) && (_enabled)) {
++		MAC wireTo(to);
++		MAC wireFrom(from);
++#ifdef __HAIKU__
++		if ((_nativeMac) && (_ztMac) && (! (_nativeMac == _ztMac))) {
++			if (etherType == ZT_ETHERTYPE_ARP) {
++				const uint8_t* arp = reinterpret_cast<const uint8_t*>(data);
++				uint8_t response[ZT_ARP_BUF_LENGTH];
++				unsigned int responseLen = 0;
++				MAC responseDest;
++				uint32_t learnedIp = 0;
++				{
++					Mutex::Lock _l(_haikuStateLock);
++					learnedIp = _haikuArp.processIncomingArp(data, len, response, responseLen, responseDest);
++				}
++				char fromMacStr[18];
++				char toMacStr[18];
++				char responseDestStr[18];
++				char learnedIpStr[INET_ADDRSTRLEN];
++				fprintf(stderr, "HAIKU TAP ARP IN type=%s from=%s to=%s learned=%s responseLen=%u responseDest=%s" ZT_EOL_S, ___haikuIsArpResponse(arp, len) ? "response" : (___haikuIsArpRequest(arp, len) ? "request" : "other"), from.toString(fromMacStr), to.toString(toMacStr), learnedIp ? ___haikuIpv4ToString(learnedIp, learnedIpStr) : "-", responseLen, responseDest.toString(responseDestStr));
++				fflush(stderr);
++				if (responseLen) {
++					_handler(_arg, (void*)0, _nwid, _ztMac, responseDest, ZT_ETHERTYPE_ARP, 0, response, responseLen);
++				}
++				if (! ___haikuIsArpResponse(arp, len)) {
++					return;
++				}
++			}
++
++			if (wireTo == _ztMac) {
++				wireTo = _nativeMac;
++			}
++			if (wireFrom == _ztMac) {
++				wireFrom = _nativeMac;
++			}
++		}
++#endif
++		wireTo.copyTo(putBuf, 6);
++		wireFrom.copyTo(putBuf + 6, 6);
+ 		*((uint16_t*)(putBuf + 12)) = htons((uint16_t)etherType);
+ 		memcpy(putBuf + 14, data, len);
++#ifdef __HAIKU__
++		if ((_nativeMac) && (_ztMac) && (! (_nativeMac == _ztMac))) {
++			if (etherType == ZT_ETHERTYPE_ARP) {
++				___haikuRewriteArpPayloadMacs(reinterpret_cast<uint8_t*>(putBuf + 14), len, _ztMac, _nativeMac);
++			}
++			else if (etherType == ZT_ETHERTYPE_IPV6) {
++				___haikuRewriteNdPayloadMacs(reinterpret_cast<uint8_t*>(putBuf + 14), len, _ztMac, _nativeMac);
++			}
++		}
++#endif
+ 		len += 14;
+ 		::write(_fd, putBuf, len);
+ 	}
+@@ -372,7 +1118,7 @@
+ {
+ 	std::vector<MulticastGroup> newGroups;
+ 
+-#ifndef __OpenBSD__
++#if !defined(__OpenBSD__) && !defined(__HAIKU__)
+ 	struct ifmaddrs* ifmap = (struct ifmaddrs*)0;
+ 	if (! getifmaddrs(&ifmap)) {
+ 		struct ifmaddrs* p = ifmap;
+@@ -387,7 +1133,7 @@
+ 		}
+ 		freeifmaddrs(ifmap);
+ 	}
+-#endif	 // __OpenBSD__
++#endif	 // !__OpenBSD__ && !__HAIKU__
+ 
+ 	std::vector<InetAddress> allIps(ips());
+ 	for (std::vector<InetAddress>::iterator ip(allIps.begin()); ip != allIps.end(); ++ip)
+@@ -435,13 +1181,84 @@
+ 	// constructing itself.
+ 	Thread::sleep(500);
+ 
+-#ifndef __OpenBSD__
++#ifdef __HAIKU__
++	uint8_t b[ZT_TAP_BUF_SIZE];
++	if (! _concurrency) {
++		_concurrency = 1;
++	}
++	fprintf(stderr, "HAIKU TAP THREADMAIN dev=%s concurrency=%u" ZT_EOL_S, _dev.c_str(), _concurrency);
++	fflush(stderr);
++
++	if (_dev.compare(0, 4, "tun/") == 0) {
++		for (;;) {
++			const int n = (int)::read(_fd, b, sizeof(b));
++			if (n < 0) {
++				if ((errno != EINTR) && (errno != ETIMEDOUT))
++					break;
++				continue;
++			}
++			if ((n <= 0) || (! _enabled))
++				continue;
++
++			const uint8_t version = (uint8_t)(b[0] >> 4);
++			if ((version == 4) && (n >= 20)) {
++				const uint8_t* dst = b + 16;
++				if ((dst[0] >= 224) && (dst[0] <= 239)) {
++					const MAC to(___ipv4MulticastToMac(dst));
++					_handler(_arg, (void*)0, _nwid, _ztMac, to, ZT_ETHERTYPE_IPV4, 0, b, (unsigned int)n);
++				}
++				else if ((dst[0] == 255) && (dst[1] == 255) && (dst[2] == 255) && (dst[3] == 255)) {
++					_handler(_arg, (void*)0, _nwid, _ztMac, ___broadcastMac, ZT_ETHERTYPE_IPV4, 0, b, (unsigned int)n);
++				}
++				else {
++					uint32_t srcIp = 0;
++					uint32_t dstIp = 0;
++					memcpy(&srcIp, b + 12, 4);
++					memcpy(&dstIp, b + 16, 4);
++
++					uint8_t arpQuery[ZT_ARP_BUF_LENGTH];
++					unsigned int arpQueryLen = 0;
++					MAC arpQueryDest;
++					MAC resolvedDest;
++					{
++						Mutex::Lock _l(_haikuStateLock);
++						resolvedDest = _haikuArp.query(_ztMac, srcIp, dstIp, arpQuery, arpQueryLen, arpQueryDest);
++					}
++					char srcIpStr[INET_ADDRSTRLEN];
++					char dstIpStr[INET_ADDRSTRLEN];
++					char arpQueryDestStr[18];
++					char resolvedDestStr[18];
++					fprintf(stderr, "HAIKU TUN IP OUT src=%s dst=%s queryLen=%u queryDest=%s resolvedDest=%s" ZT_EOL_S, ___haikuIpv4ToString(srcIp, srcIpStr), ___haikuIpv4ToString(dstIp, dstIpStr), arpQueryLen, arpQueryDest.toString(arpQueryDestStr), resolvedDest.toString(resolvedDestStr));
++					fflush(stderr);
++					if (arpQueryLen) {
++						_handler(_arg, (void*)0, _nwid, _ztMac, arpQueryDest, ZT_ETHERTYPE_ARP, 0, arpQuery, arpQueryLen);
++					}
++					if (resolvedDest) {
++						_handler(_arg, (void*)0, _nwid, _ztMac, resolvedDest, ZT_ETHERTYPE_IPV4, 0, b, (unsigned int)n);
++					}
++				}
++			}
++			else if ((version == 6) && (n >= 40)) {
++				const MAC to(___haikuOutgoingDestMac(ZT_ETHERTYPE_IPV6, b, (unsigned int)n));
++				if (to) {
++					_handler(_arg, (void*)0, _nwid, _ztMac, to, ZT_ETHERTYPE_IPV6, 0, b, (unsigned int)n);
++				}
++			}
++		}
++		return;
++	}
++#endif
++
+ 	bool pinning = _pinning;
++	const unsigned int workerCount = (_concurrency ? _concurrency : 1);
+ 
+-	for (unsigned int i = 0; i < _concurrency; ++i) {
++	for (unsigned int i = 0; i < workerCount; ++i) {
+ 		_rxThreads.push_back(std::thread([this, i, pinning] {
++			fprintf(stderr, "HAIKU TAP RX START dev=%s idx=%u" ZT_EOL_S, _dev.c_str(), i);
++			fflush(stderr);
++#if !defined(__HAIKU__)
+ 			if (pinning) {
+-				int pinCore = i % _concurrency;
++				int pinCore = i % workerCount;
+ 				fprintf(stderr, "Pinning thread %d to core %d\n", i, pinCore);
+ 				pthread_t self = pthread_self();
+ 				cpu_set_t cpuset;
+@@ -454,20 +1271,17 @@
+ 					exit(1);
+ 				}
+ 			}
+-#endif	 // __OpenBSD__
++#endif
+ 
+ 			uint8_t b[ZT_TAP_BUF_SIZE];
+ 			MAC to, from;
+ 			fd_set readfds, nullfds;
+ 			int n, nfds, r;
+ 
+-			FD_ZERO(&readfds);
+-			FD_ZERO(&nullfds);
+-			nfds = (int)std::max(_shutdownSignalPipe[0], _fd) + 1;
+-
+ 			r = 0;
+ 
+ 			for (;;) {
++#if !defined(__HAIKU__)
+ 				FD_SET(_shutdownSignalPipe[0], &readfds);
+ 				FD_SET(_fd, &readfds);
+ 				select(nfds, &readfds, &nullfds, &nullfds, (struct timeval*)0);
+@@ -476,6 +1290,7 @@
+ 					break;
+ 
+ 				if (FD_ISSET(_fd, &readfds)) {
++#endif
+ 					n = (int)::read(_fd, b + r, sizeof(b) - r);
+ 					if (n < 0) {
+ 						if ((errno != EINTR) && (errno != ETIMEDOUT))
+@@ -494,18 +1309,60 @@
+ 								to.setTo(b, 6);
+ 								from.setTo(b + 6, 6);
+ 								unsigned int etherType = ntohs(((const uint16_t*)b)[6]);
+-								_handler(_arg, (void*)0, _nwid, from, to, etherType, 0, (const void*)(b + 14), r - 14);
++								bool handled = false;
++#ifdef __HAIKU__
++								if ((_nativeMac) && (_ztMac) && (! (_nativeMac == _ztMac))) {
++									if (to == _nativeMac) {
++										to = _ztMac;
++									}
++									if (from == _nativeMac) {
++										from = _ztMac;
++									}
++									if (etherType == ZT_ETHERTYPE_ARP) {
++										uint8_t* arp = reinterpret_cast<uint8_t*>(b + 14);
++										___haikuRewriteArpPayloadMacs(reinterpret_cast<uint8_t*>(b + 14), r - 14, _nativeMac, _ztMac);
++										if (___haikuIsArpRequest(arp, r - 14)) {
++											uint32_t srcIp = 0;
++											uint32_t dstIp = 0;
++											memcpy(&srcIp, arp + 14, 4);
++											memcpy(&dstIp, arp + 24, 4);
++											uint8_t arpQuery[ZT_ARP_BUF_LENGTH];
++											unsigned int arpQueryLen = 0;
++											MAC arpQueryDest;
++											{
++												Mutex::Lock _l(_haikuStateLock);
++												_haikuArp.query(_ztMac, srcIp, dstIp, arpQuery, arpQueryLen, arpQueryDest);
++											}
++											char srcIpStr[INET_ADDRSTRLEN];
++											char dstIpStr[INET_ADDRSTRLEN];
++											char arpQueryDestStr[18];
++											fprintf(stderr, "HAIKU TAP ARP OUT src=%s dst=%s queryLen=%u queryDest=%s" ZT_EOL_S, ___haikuIpv4ToString(srcIp, srcIpStr), ___haikuIpv4ToString(dstIp, dstIpStr), arpQueryLen, arpQueryDest.toString(arpQueryDestStr));
++											fflush(stderr);
++											if (arpQueryLen) {
++												_handler(_arg, (void*)0, _nwid, _ztMac, arpQueryDest, ZT_ETHERTYPE_ARP, 0, arpQuery, arpQueryLen);
++											}
++											handled = true;
++										}
++									}
++									else if (etherType == ZT_ETHERTYPE_IPV6) {
++										___haikuRewriteNdPayloadMacs(reinterpret_cast<uint8_t*>(b + 14), r - 14, _nativeMac, _ztMac);
++									}
++								}
++#endif
++								if (! handled) {
++									_handler(_arg, (void*)0, _nwid, from, to, etherType, 0, (const void*)(b + 14), r - 14);
++								}
+ 							}
+ 
+ 							r = 0;
+ 						}
+ 					}
++#if !defined(__HAIKU__)
+ 				}
++#endif
+ 			}
+-#ifndef __OpenBSD__
+ 		}));
+ 	}
+-#endif	 // __OpenBSD__
+ }
+ 
+ }	// namespace ZeroTier
+diff -ruN a/osdep/BSDEthernetTap.hpp b/osdep/BSDEthernetTap.hpp
+--- a/osdep/BSDEthernetTap.hpp	2025-09-12 02:52:09.000000000 +0900
++++ b/osdep/BSDEthernetTap.hpp	2026-03-20 01:52:13.377059801 +0900
+@@ -10,8 +10,10 @@
+ #define ZT_BSDETHERNETTAP_HPP
+ 
+ #include "../node/Constants.hpp"
++#include "../node/Mutex.hpp"
+ #include "../node/MAC.hpp"
+ #include "../node/MulticastGroup.hpp"
++#include "Arp.hpp"
+ #include "EthernetTap.hpp"
+ #include "Thread.hpp"
+ 
+@@ -59,10 +61,18 @@
+   private:
+ 	void (*_handler)(void*, void*, uint64_t, const MAC&, const MAC&, unsigned int, unsigned int, const void*, unsigned int);
+ 	void* _arg;
+-	unsigned int _concurrency;
+-	bool _pinning;
+-	uint64_t _nwid;
+-	Thread _thread;
++		unsigned int _concurrency;
++		bool _pinning;
++		uint64_t _nwid;
++		MAC _ztMac;
++		MAC _nativeMac;
++		Mutex _haikuStateLock;
++		Arp _haikuArp;
++		std::vector<InetAddress> _haikuLocalV6Ips;
++		Thread _thread;
++#ifdef __HAIKU__
++		std::thread _haikuMainThread;
++#endif
+ 	std::string _dev;
+ 	std::vector<MulticastGroup> _multicastGroups;
+ 	unsigned int _mtu;
+diff -ruN a/osdep/Binder.hpp b/osdep/Binder.hpp
+--- a/osdep/Binder.hpp	2025-09-12 02:52:09.000000000 +0900
++++ b/osdep/Binder.hpp	2026-03-19 21:55:00.979603999 +0900
+@@ -23,7 +23,11 @@
+ #include <windows.h>
+ #include <winsock2.h>
+ #else
++#ifdef __HAIKU__
++#include <bsd/ifaddrs.h>
++#else
+ #include <ifaddrs.h>
++#endif
+ #include <sys/socket.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
+diff -ruN a/osdep/EthernetTap.cpp b/osdep/EthernetTap.cpp
+--- a/osdep/EthernetTap.cpp	2025-09-12 02:52:09.000000000 +0900
++++ b/osdep/EthernetTap.cpp	2026-03-19 23:25:53.046241064 +0900
+@@ -49,6 +49,10 @@
+ #include "BSDEthernetTap.hpp"
+ #endif	 // __OpenBSD__
+ 
++#ifdef __HAIKU__
++#include "BSDEthernetTap.hpp"
++#endif	 // __HAIKU__
++
+ #endif
+ 
+ namespace ZeroTier {
+@@ -135,6 +139,10 @@
+ 	return std::shared_ptr<EthernetTap>(new BSDEthernetTap(homePath, concurrency, pinning, mac, mtu, metric, nwid, friendlyName, handler, arg));
+ #endif	 // __OpenBSD__
+ 
++#ifdef __HAIKU__
++	return std::shared_ptr<EthernetTap>(new BSDEthernetTap(homePath, concurrency, pinning, mac, mtu, metric, nwid, friendlyName, handler, arg));
++#endif	 // __HAIKU__
++
+ #endif	 // ZT_SDK?
+ 
+ 	return std::shared_ptr<EthernetTap>();
+diff -ruN a/osdep/ManagedRoute.cpp b/osdep/ManagedRoute.cpp
+--- a/osdep/ManagedRoute.cpp	2025-09-12 02:52:09.000000000 +0900
++++ b/osdep/ManagedRoute.cpp	2026-03-19 21:52:54.234043502 +0900
+@@ -297,6 +297,38 @@
+ 
+ #endif	 // __BSD__ ------------------------------------------------------------
+ 
++#ifdef __HAIKU__   // ----------------------------------------------------------
++#define ZT_ROUTING_SUPPORT_FOUND 1
++
++static void _haikuRouteCmd(const char* op, const char* device, const InetAddress& target, const InetAddress& via)
++{
++	long p = (long)fork();
++	if (p > 0) {
++		int exitcode = -1;
++		::waitpid(p, &exitcode, 0);
++	}
++	else if (p == 0) {
++		::close(STDOUT_FILENO);
++		::close(STDERR_FILENO);
++
++		char ttmp[64];
++		char iptmp[64];
++		char prefix[8];
++		OSUtils::ztsnprintf(prefix, sizeof(prefix), "%u", target.netmaskBits());
++
++		if (via) {
++			::execlp("route", "route", op, device, ((target.ss_family == AF_INET6) ? "inet6" : "inet"), target.toIpString(ttmp), "prefixlen", prefix, "gw", via.toIpString(iptmp), (const char*)0);
++		}
++		else {
++			::execlp("route", "route", op, device, ((target.ss_family == AF_INET6) ? "inet6" : "inet"), target.toIpString(ttmp), "prefixlen", prefix, (const char*)0);
++		}
++
++		::_exit(-1);
++	}
++}
++
++#endif	 // __HAIKU__ ----------------------------------------------------------
++
+ #ifdef __LINUX__   // ----------------------------------------------------------
+ #define ZT_ROUTING_SUPPORT_FOUND 1
+ 
+@@ -564,6 +596,19 @@
+ 
+ #endif	 // __BSD__ ------------------------------------------------------------
+ 
++#ifdef __HAIKU__   // ----------------------------------------------------------
++
++	if ((leftt) && (! _applied.count(leftt))) {
++		_applied[leftt] = false;
++		_haikuRouteCmd("add", _device, leftt, _via);
++	}
++	if ((rightt) && (! _applied.count(rightt))) {
++		_applied[rightt] = false;
++		_haikuRouteCmd("add", _device, rightt, _via);
++	}
++
++#endif	 // __HAIKU__ ----------------------------------------------------------
++
+ #ifdef __LINUX__   // ----------------------------------------------------------
+ 
+ #ifdef ZT_EXTOSDEP
+@@ -628,6 +673,10 @@
+ 		break;
+ #endif	 // __BSD__ ------------------------------------------------------------
+ 
++#ifdef __HAIKU__   // ----------------------------------------------------------
++		_haikuRouteCmd("delete", _device, r->first, _via);
++#endif	 // __HAIKU__ ----------------------------------------------------------
++
+ #ifdef __LINUX__   // ----------------------------------------------------------
+ 				   //_routeCmd("del",r->first,_via,(_via) ? (const char *)0 : _device);
+ #ifdef ZT_EXTOSDEP
+diff -ruN a/osdep/OSUtils.cpp b/osdep/OSUtils.cpp
+--- a/osdep/OSUtils.cpp	2025-09-12 02:52:09.000000000 +0900
++++ b/osdep/OSUtils.cpp	2026-03-19 21:47:20.813077809 +0900
+@@ -125,8 +125,23 @@
+ 		if (readdir_r(d, &de, &dptr))
+ 			break;
+ 		if (dptr) {
+-			if ((strcmp(dptr->d_name, ".")) && (strcmp(dptr->d_name, "..")) && ((dptr->d_type != DT_DIR) || (includeDirectories)))
+-				r.push_back(std::string(dptr->d_name));
++			if ((strcmp(dptr->d_name, ".")) && (strcmp(dptr->d_name, ".."))) {
++#ifdef __HAIKU__
++				if (includeDirectories) {
++					r.push_back(std::string(dptr->d_name));
++				}
++				else {
++					char fullPath[4096];
++					struct stat st;
++					ztsnprintf(fullPath, sizeof(fullPath), "%s/%s", path, dptr->d_name);
++					if ((stat(fullPath, &st) == 0) && (! S_ISDIR(st.st_mode)))
++						r.push_back(std::string(dptr->d_name));
++				}
++#else
++				if ((dptr->d_type != DT_DIR) || (includeDirectories))
++					r.push_back(std::string(dptr->d_name));
++#endif
++			}
+ 		}
+ 		else
+ 			break;
+@@ -177,9 +192,9 @@
+ 		if (readdir_r(d, &de, &dptr))
+ 			break;
+ 		if (dptr) {
+-			if ((strcmp(dptr->d_name, ".")) && (strcmp(dptr->d_name, "..")) && (dptr->d_type == DT_REG)) {
++			if ((strcmp(dptr->d_name, ".")) && (strcmp(dptr->d_name, ".."))) {
+ 				ztsnprintf(tmp, sizeof(tmp), "%s/%s", path, dptr->d_name);
+-				if (stat(tmp, &st) == 0) {
++				if ((stat(tmp, &st) == 0) && S_ISREG(st.st_mode)) {
+ 					int64_t mt = (int64_t)(st.st_mtime);
+ 					if ((mt > 0) && ((mt * 1000) < olderThan)) {
+ 						if (unlink(tmp) == 0)
+@@ -449,6 +464,10 @@
+ 	return std::string("/Library/Application Support/ZeroTier/One");
+ #else
+ 
++#ifdef __HAIKU__
++	return std::string("/boot/system/non-packaged/var/lib/zerotier-one");
++#else
++
+ #ifdef __BSD__
+ 	// BSD likes /var/db instead of /var/lib
+ 	return std::string("/var/db/zerotier-one");
+@@ -458,6 +477,8 @@
+ #endif
+ 
+ #endif
++
++#endif
+ 
+ #else	// not __UNIX_LIKE__
+ 
+diff -ruN a/osdep/OSUtils.hpp b/osdep/OSUtils.hpp
+--- a/osdep/OSUtils.hpp	2025-09-12 02:52:09.000000000 +0900
++++ b/osdep/OSUtils.hpp	2026-03-19 22:07:53.146967384 +0900
+@@ -117,8 +117,10 @@
+ 			return true;
+ 		return (::CreateDirectoryA(path, NULL) == TRUE);
+ #else
+-		if (::mkdir(path, 0755) != 0)
+-			return (errno == EEXIST);
++		if (::mkdir(path, 0755) != 0) {
++			struct stat st;
++			return ((::stat(path, &st) == 0) && S_ISDIR(st.st_mode));
++		}
+ 		return true;
+ #endif
+ 	}
+diff -ruN a/service/OneService.cpp b/service/OneService.cpp
+--- a/service/OneService.cpp	2025-09-12 02:52:09.000000000 +0900
++++ b/service/OneService.cpp	2026-03-20 16:25:42.265209829 +0900
+@@ -39,6 +39,7 @@
+ #include "../osdep/OSUtils.hpp"
+ #include "../osdep/Phy.hpp"
+ #include "../osdep/PortMapper.hpp"
++#include "../osdep/Thread.hpp"
+ #include "../version.h"
+ #include "OneService.hpp"
+ 
+@@ -953,6 +954,9 @@
+ 		, _serverThreadV6()
+ 		, _serverThreadRunning(false)
+ 		, _serverThreadRunningV6(false)
++		, _multicoreEnabled(false)
++		, _cpuPinningEnabled(false)
++		, _concurrency(1)
+ 		, _forceTcpRelay(false)
+ 		, _primaryPort(port)
+ 		, _udpPortPickerCounter(0)
+@@ -2318,6 +2322,12 @@
+ 				}
+ 				setNetworkSettings(wantnw, ns.settings());
+ 				if (ns.tap()) {
++#ifdef __HAIKU__
++					if (ns.tap()->deviceName().compare(0, 4, "tap/") == 0) {
++						ns.tap()->setMtu(ns.config().mtu);
++					}
++					else
++#endif
+ 					syncManagedStuff(ns, true, true, true);
+ 				}
+ 
+@@ -3040,6 +3050,27 @@
+ 			std::sort(newManagedIps.begin(), newManagedIps.end());
+ 			newManagedIps.erase(std::unique(newManagedIps.begin(), newManagedIps.end()), newManagedIps.end());
+ 
++#ifdef __HAIKU__
++			if (n.tap() && (n.tap()->deviceName().compare(0, 4, "tap/") == 0)) {
++				InetAddress preferredV6;
++				for (std::vector<InetAddress>::const_iterator ip(newManagedIps.begin()); ip != newManagedIps.end(); ++ip) {
++					if (ip->isV6() && ((! preferredV6) || (ip->netmaskBits() > preferredV6.netmaskBits()))) {
++						preferredV6 = *ip;
++					}
++				}
++				if (preferredV6) {
++					newManagedIps.erase(
++						std::remove_if(
++							newManagedIps.begin(),
++							newManagedIps.end(),
++							[preferredV6](const InetAddress& candidate) {
++								return candidate.isV6() && (candidate != preferredV6);
++							}),
++						newManagedIps.end());
++				}
++			}
++#endif
++
+ 			for (std::vector<InetAddress>::iterator ip(n.managedIps().begin()); ip != n.managedIps().end(); ++ip) {
+ 				if (std::find(newManagedIps.begin(), newManagedIps.end(), *ip) == newManagedIps.end()) {
+ 					if (! n.tap()->removeIp(*ip))
+@@ -3521,6 +3552,10 @@
+ 					try {
+ 						char friendlyName[128];
+ 						OSUtils::ztsnprintf(friendlyName, sizeof(friendlyName), "ZeroTier One [%.16llx]", nwid);
++#ifdef __HAIKU__
++						char nwcMacStr[18];
++						fprintf(stderr, "HAIKU NW CONFIG op=UP nwid=%.16llx mac=%s mtu=%u status=%d assigned=%u" ZT_EOL_S, (unsigned long long)nwid, MAC(nwc->mac).toString(nwcMacStr), (unsigned int)nwc->mtu, (int)nwc->status, (unsigned int)nwc->assignedAddressCount);
++#endif
+ 
+ 						n.setTap(EthernetTap::newInstance(nullptr, _concurrency, _cpuPinningEnabled, _homePath.c_str(), MAC(nwc->mac), nwc->mtu, (unsigned int)ZT_IF_METRIC, nwid, friendlyName, StapFrameHandler, (void*)this));
+ 						*nuptr = (void*)&n;
+@@ -3597,6 +3632,25 @@
+ 						Sleep(10);
+ 					}
+ #endif
++#ifdef __HAIKU__
++					if (n.tap()->deviceName().compare(0, 4, "tap/") == 0) {
++						const uint64_t deferredNwid = nwid;
++						fprintf(stderr, "HAIKU NW CONFIG defer-sync nwid=%.16llx dev=%s assigned=%u" ZT_EOL_S, (unsigned long long)deferredNwid, n.tap()->deviceName().c_str(), (unsigned int)n.config().assignedAddressCount);
++						std::thread([this, deferredNwid]() {
++							Thread::sleep(1000);
++							Mutex::Lock _l(_nets_m);
++							std::map<uint64_t, NetworkState>::iterator it = _nets.find(deferredNwid);
++							if ((it == _nets.end()) || (! it->second.tap())) {
++								return;
++							}
++
++							fprintf(stderr, "HAIKU NW CONFIG deferred-sync nwid=%.16llx dev=%s begin" ZT_EOL_S, (unsigned long long)deferredNwid, it->second.tap()->deviceName().c_str());
++							syncManagedStuff(it->second, true, false, false);
++							fprintf(stderr, "HAIKU NW CONFIG deferred-sync nwid=%.16llx dev=%s done" ZT_EOL_S, (unsigned long long)deferredNwid, it->second.tap()->deviceName().c_str());
++						}).detach();
++					}
++					else
++#endif
+ 					syncManagedStuff(n, true, true, true);
+ 					n.tap()->setMtu(nwc->mtu);
+ 				}
