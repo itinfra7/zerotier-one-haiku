@@ -114,6 +114,43 @@ static int parse_ipv6_cidr(const char *value, struct ipv6_route *out)
 	return 1;
 }
 
+static void apply_policy_line(char *line)
+{
+	size_t len;
+
+	if (line == NULL)
+		return;
+
+	len = strlen(line);
+	while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+		line[--len] = '\0';
+	}
+	if (len == 0)
+		return;
+
+	if (strncmp(line, "public_v6_default=", 18) == 0) {
+		g_cache.public_v6_default = atoi(line + 18) ? 1 : 0;
+		return;
+	}
+	if (strncmp(line, "zt_v4=", 6) == 0) {
+		struct ipv4_route route4;
+		if (g_cache.v4_count >= MAX_ZT_V4_ROUTES)
+			return;
+		if (!parse_ipv4_cidr(line + 6, &route4))
+			return;
+		g_cache.v4[g_cache.v4_count++] = route4;
+		return;
+	}
+	if (strncmp(line, "zt_v6=", 6) == 0) {
+		struct ipv6_route route6;
+		if (g_cache.v6_count >= MAX_ZT_V6_ROUTES)
+			return;
+		if (!parse_ipv6_cidr(line + 6, &route6))
+			return;
+		g_cache.v6[g_cache.v6_count++] = route6;
+	}
+}
+
 static void refresh_route_cache(void)
 {
 	FILE *fp;
@@ -142,30 +179,15 @@ static void refresh_route_cache(void)
 		return;
 
 	while (fgets(line, sizeof(line), fp) != NULL) {
-		size_t len = strlen(line);
-		while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-			line[--len] = '\0';
-		}
-		if (strncmp(line, "public_v6_default=", 18) == 0) {
-			g_cache.public_v6_default = atoi(line + 18) ? 1 : 0;
-			continue;
-		}
-		if (strncmp(line, "zt_v4=", 6) == 0) {
-			struct ipv4_route route4;
-			if (g_cache.v4_count >= MAX_ZT_V4_ROUTES)
-				continue;
-			if (!parse_ipv4_cidr(line + 6, &route4))
-				continue;
-			g_cache.v4[g_cache.v4_count++] = route4;
-			continue;
-		}
-		if (strncmp(line, "zt_v6=", 6) == 0) {
-			struct ipv6_route route6;
-			if (g_cache.v6_count >= MAX_ZT_V6_ROUTES)
-				continue;
-			if (!parse_ipv6_cidr(line + 6, &route6))
-				continue;
-			g_cache.v6[g_cache.v6_count++] = route6;
+		char *cursor = line;
+		for (;;) {
+			char *escaped_newline = strstr(cursor, "\\n");
+			if (escaped_newline != NULL)
+				*escaped_newline = '\0';
+			apply_policy_line(cursor);
+			if (escaped_newline == NULL)
+				break;
+			cursor = escaped_newline + 2;
 		}
 	}
 

@@ -1,26 +1,9 @@
 #!/usr/bin/env bash
-
-# ==============================================================================
-# ZeroTier One 1.16.0 Installer for Haiku R1/beta5 x86_64
-#
-# Release:
-# - Version: v1.1.0
-# - Date: 2026-03-24
-#
-# Credits:
-# - ZeroTier One Upstream: https://github.com/zerotier/ZeroTierOne
-# - Haiku Target Platform: https://www.haiku-os.org/
-# - Haiku adaptation, assets, and release packaging: itinfra7 on GitHub (https://github.com/itinfra7)
-# ==============================================================================
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ZT_VERSION="${ZT_VERSION:-1.16.0}"
-RELEASE_TAG="${RELEASE_TAG:-v1.1.0}"
-RELEASE_DATE="${RELEASE_DATE:-2026-03-24}"
-RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://github.com/itinfra7/zerotier-one-haiku/releases/download/${RELEASE_TAG}}"
 USE_LOCAL_SRC="${USE_LOCAL_SRC:-0}"
 LOCAL_SRC_DIR="${LOCAL_SRC_DIR:-$SCRIPT_DIR/zerotier-one-$ZT_VERSION}"
 SOURCE_URL="${SOURCE_URL:-https://github.com/zerotier/ZeroTierOne/archive/refs/tags/${ZT_VERSION}.tar.gz}"
@@ -28,23 +11,13 @@ WORK_ROOT="${WORK_ROOT:-/boot/home/zerotier-build}"
 BUILD_ROOT="${BUILD_ROOT:-$WORK_ROOT/ZeroTierOne-$ZT_VERSION}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-$WORK_ROOT/ZeroTierOne-$ZT_VERSION.tar.gz}"
 PATCH_PATH="${PATCH_PATH:-$WORK_ROOT/zerotier-one-haiku-$ZT_VERSION.patch}"
-ASSET_STAGING_ROOT="${ASSET_STAGING_ROOT:-$WORK_ROOT/release-assets}"
-ASSET_DIR="${ASSET_DIR:-$ASSET_STAGING_ROOT/install-zerotier-one-haiku.files}"
-PATCH_ASSET_NAME="${PATCH_ASSET_NAME:-zerotier-one-haiku-$ZT_VERSION.patch}"
-LOCAL_CONF_ASSET_NAME="${LOCAL_CONF_ASSET_NAME:-local.conf.json}"
-POLICY_REFRESH_ASSET_NAME="${POLICY_REFRESH_ASSET_NAME:-haiku-net-family-refresh.py}"
-PRELOAD_SOURCE_ASSET_NAME="${PRELOAD_SOURCE_ASSET_NAME:-haiku-net-family-preload.c}"
-HOTFIX_ASSET_NAME="${HOTFIX_ASSET_NAME:-apply-incremental-hotfixes.py}"
-PATCH_ASSET_URL="${PATCH_ASSET_URL:-$RELEASE_BASE_URL/$PATCH_ASSET_NAME}"
-LOCAL_CONF_ASSET_URL="${LOCAL_CONF_ASSET_URL:-$RELEASE_BASE_URL/$LOCAL_CONF_ASSET_NAME}"
-POLICY_REFRESH_ASSET_URL="${POLICY_REFRESH_ASSET_URL:-$RELEASE_BASE_URL/$POLICY_REFRESH_ASSET_NAME}"
-PRELOAD_SOURCE_ASSET_URL="${PRELOAD_SOURCE_ASSET_URL:-$RELEASE_BASE_URL/$PRELOAD_SOURCE_ASSET_NAME}"
-HOTFIX_ASSET_URL="${HOTFIX_ASSET_URL:-$RELEASE_BASE_URL/$HOTFIX_ASSET_NAME}"
+ASSET_DIR="${ASSET_DIR:-$SCRIPT_DIR/install-zerotier-one-haiku.files}"
 PATCH_SOURCE_PATH="${PATCH_SOURCE_PATH:-$ASSET_DIR/zerotier-one-haiku-$ZT_VERSION.patch}"
 LOCAL_CONF_TEMPLATE_PATH="${LOCAL_CONF_TEMPLATE_PATH:-$ASSET_DIR/local.conf.json}"
 POLICY_REFRESH_TEMPLATE_PATH="${POLICY_REFRESH_TEMPLATE_PATH:-$ASSET_DIR/haiku-net-family-refresh.py}"
 PRELOAD_SOURCE_TEMPLATE_PATH="${PRELOAD_SOURCE_TEMPLATE_PATH:-$ASSET_DIR/haiku-net-family-preload.c}"
 HOTFIX_SCRIPT_PATH="${HOTFIX_SCRIPT_PATH:-$ASSET_DIR/apply-incremental-hotfixes.py}"
+PKGMAN_IPV4_REFRESH_TEMPLATE_PATH="${PKGMAN_IPV4_REFRESH_TEMPLATE_PATH:-$ASSET_DIR/haiku-pkgman-ipv4-refresh.py}"
 STATE_DIR="${STATE_DIR:-/boot/system/non-packaged/var/lib/zerotier-one}"
 BIN_DIR="${BIN_DIR:-/boot/system/non-packaged/bin}"
 USER_BIN_DIR="${USER_BIN_DIR:-/boot/home/config/non-packaged/bin}"
@@ -52,6 +25,8 @@ USER_LIB_DIR="${USER_LIB_DIR:-/boot/home/config/non-packaged/lib}"
 POLICY_STATE_FILE="${POLICY_STATE_FILE:-/boot/home/config/settings/haiku-net-family-routes.conf}"
 POLICY_REFRESH_PATH="${POLICY_REFRESH_PATH:-$BIN_DIR/haiku-net-family-refresh.py}"
 POLICY_PRELOAD_LIB="${POLICY_PRELOAD_LIB:-$USER_LIB_DIR/libhaiku_net_family.so}"
+PKGMAN_IPV4_REFRESH_PATH="${PKGMAN_IPV4_REFRESH_PATH:-$BIN_DIR/haiku-pkgman-ipv4-refresh.py}"
+PKGMAN_HOSTS_PATH="${PKGMAN_HOSTS_PATH:-/boot/system/settings/network/hosts}"
 DESKTOP_ENV_FILE="${DESKTOP_ENV_FILE:-/boot/home/config/settings/launch/haiku-net-family-env}"
 PROFILE_PATH="${PROFILE_PATH:-/boot/home/config/settings/profile}"
 BASH_DOT_PROFILE_PATH="${BASH_DOT_PROFILE_PATH:-/boot/home/.bash_profile}"
@@ -73,6 +48,8 @@ PROFILE_MARKER_BEGIN="# BEGIN HAIKU NET FAMILY POLICY"
 PROFILE_MARKER_END="# END HAIKU NET FAMILY POLICY"
 SSHD_ENV_MARKER_BEGIN="# BEGIN HAIKU NET FAMILY SSHD ENV"
 SSHD_ENV_MARKER_END="# END HAIKU NET FAMILY SSHD ENV"
+PKGMAN_HOSTS_MARKER_BEGIN="# BEGIN HAIKU PKGMAN IPV4 HOSTS"
+PKGMAN_HOSTS_MARKER_END="# END HAIKU PKGMAN IPV4 HOSTS"
 
 log() {
 	printf '[haiku-zt-install] %s\n' "$*"
@@ -161,36 +138,6 @@ for item in sys.argv[3:]:
 output_path.parent.mkdir(parents=True, exist_ok=True)
 output_path.write_text(text)
 PY
-}
-
-download_release_asset() {
-	local asset_url="$1"
-	local output_path="$2"
-	local asset_label="$3"
-
-	log "downloading release asset: $asset_label"
-	mkdir -p "$(dirname "$output_path")"
-	curl -L --fail -o "$output_path" "$asset_url"
-	[ -s "$output_path" ] || fail "failed to download release asset: $asset_label"
-}
-
-download_release_assets() {
-	log "refreshing release asset workspace: $ASSET_DIR"
-	rm -rf "$ASSET_STAGING_ROOT"
-	mkdir -p "$ASSET_DIR"
-
-	download_release_asset "$PATCH_ASSET_URL" "$PATCH_SOURCE_PATH" "$PATCH_ASSET_NAME"
-	download_release_asset "$LOCAL_CONF_ASSET_URL" "$LOCAL_CONF_TEMPLATE_PATH" "$LOCAL_CONF_ASSET_NAME"
-	download_release_asset "$POLICY_REFRESH_ASSET_URL" "$POLICY_REFRESH_TEMPLATE_PATH" "$POLICY_REFRESH_ASSET_NAME"
-	download_release_asset "$PRELOAD_SOURCE_ASSET_URL" "$PRELOAD_SOURCE_TEMPLATE_PATH" "$PRELOAD_SOURCE_ASSET_NAME"
-	download_release_asset "$HOTFIX_ASSET_URL" "$HOTFIX_SCRIPT_PATH" "$HOTFIX_ASSET_NAME"
-
-	[ -d "$ASSET_DIR" ] || fail "missing release asset directory: $ASSET_DIR"
-	[ -f "$PATCH_SOURCE_PATH" ] || fail "missing release patch asset: $PATCH_SOURCE_PATH"
-	[ -f "$LOCAL_CONF_TEMPLATE_PATH" ] || fail "missing release local.conf template: $LOCAL_CONF_TEMPLATE_PATH"
-	[ -f "$POLICY_REFRESH_TEMPLATE_PATH" ] || fail "missing release family policy refresh template: $POLICY_REFRESH_TEMPLATE_PATH"
-	[ -f "$PRELOAD_SOURCE_TEMPLATE_PATH" ] || fail "missing release preload source template: $PRELOAD_SOURCE_TEMPLATE_PATH"
-	[ -f "$HOTFIX_SCRIPT_PATH" ] || fail "missing release incremental hotfix script: $HOTFIX_SCRIPT_PATH"
 }
 
 copy_asset_file() {
@@ -495,6 +442,43 @@ join_configured_networks() {
 	done
 }
 
+daemon_pid_from_state() {
+	pidfile="$state_dir/zerotier-one.pid"
+	if [ -r "$pidfile" ]; then
+		pid=$(cat "$pidfile" 2>/dev/null || true)
+		case "$pid" in
+			''|*[!0-9]*) ;;
+			*)
+				if kill -0 "$pid" 2>/dev/null; then
+					printf '%s\n' "$pid"
+					return 0
+				fi
+				;;
+		esac
+	fi
+
+	for tid in $(pid_list_for_path '/boot/system/non-packaged/bin/zerotier-one'); do
+		printf '%s\n' "$tid"
+		return 0
+	done
+	return 1
+}
+
+adopt_daemon_pid() {
+	i=0
+	while [ "$i" -lt 10 ]; do
+		pid=$(daemon_pid_from_state || true)
+		if [ -n "$pid" ]; then
+			zt_pid="$pid"
+			log "tracking zerotier-one daemon pid=\$zt_pid"
+			return 0
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+	return 1
+}
+
 start_cycle() {
 	attempt="$1"
 
@@ -512,6 +496,9 @@ start_cycle() {
 	fi
 
 	log "cli ready attempt=$attempt"
+	if ! adopt_daemon_pid; then
+		log "could not determine zerotier-one daemon pid attempt=$attempt"
+	fi
 	start_keepalive
 
 	if wait_for_stable_online; then
@@ -535,7 +522,12 @@ start_cycle() {
 
 monitor_cycle() {
 	while [ "$shutdown_requested" -eq 0 ]; do
-		if [ -n "$zt_pid" ] && kill -0 "$zt_pid" 2>/dev/null; then
+		current_pid=$(daemon_pid_from_state || true)
+		if [ -z "$current_pid" ] && [ -n "$zt_pid" ] && kill -0 "$zt_pid" 2>/dev/null; then
+			current_pid="$zt_pid"
+		fi
+		if [ -n "$current_pid" ]; then
+			zt_pid="$current_pid"
 			monitor_ticks=$((monitor_ticks + 1))
 			if [ $((monitor_ticks % 3)) -eq 0 ]; then
 				refresh_family_policy_cache
@@ -630,6 +622,7 @@ shutdown_requested=0
 child_pid=""
 sshd_path="/boot/system/bin/sshd"
 sshd_stopped=0
+pkgman_ipv4_refresh_path="/boot/system/non-packaged/bin/haiku-pkgman-ipv4-refresh.py"
 
 log() {
 	printf '[public-net-watchdog] %s\n' "\$*" >> "\$log_file"
@@ -662,6 +655,12 @@ sshd_listener_pids() {
 
 sshd_running() {
 	ps | grep '^/boot/system/bin/sshd -D' | grep -v grep >/dev/null 2>&1
+}
+
+refresh_pkgman_ipv4_hosts() {
+	if [ -x "\$pkgman_ipv4_refresh_path" ]; then
+		"\$pkgman_ipv4_refresh_path" >/tmp/haiku-pkgman-ipv4-refresh.out 2>/tmp/haiku-pkgman-ipv4-refresh.err || true
+	fi
 }
 
 acquire_lock() {
@@ -847,12 +846,14 @@ fi
 
 if boot_network_ready; then
 	log "public network already ready"
+	refresh_pkgman_ipv4_hosts
 	exit 0
 fi
 
 log "waiting for stock DHCP during initial grace"
 if wait_for_network "\$initial_grace"; then
 	log "public network became ready without intervention"
+	refresh_pkgman_ipv4_hosts
 	exit 0
 fi
 
@@ -868,6 +869,7 @@ while [ "\$attempt" -le "\$max_retries" ]; do
 	trigger_autoconfig
 	if wait_for_network "\$retry_wait"; then
 		log "public network restored after interface reset attempt=\$attempt"
+		refresh_pkgman_ipv4_hosts
 		start_sshd_listener
 		exit 0
 	fi
@@ -877,6 +879,7 @@ while [ "\$attempt" -le "\$max_retries" ]; do
 	trigger_autoconfig
 	if wait_for_network "\$retry_wait"; then
 		log "public network restored after net_server restart attempt=\$attempt"
+		refresh_pkgman_ipv4_hosts
 		start_sshd_listener
 		exit 0
 	fi
@@ -939,6 +942,17 @@ write_family_policy_refresh_helper() {
 	[ -f "$POLICY_REFRESH_TEMPLATE_PATH" ] || fail "missing family policy refresh template: $POLICY_REFRESH_TEMPLATE_PATH"
 	render_template_file "$POLICY_REFRESH_TEMPLATE_PATH" "$POLICY_REFRESH_PATH" POLICY_STATE_FILE="$POLICY_STATE_FILE"
 	chmod 755 "$POLICY_REFRESH_PATH"
+}
+
+write_pkgman_ipv4_refresh_helper() {
+	[ -f "$PKGMAN_IPV4_REFRESH_TEMPLATE_PATH" ] || fail "missing pkgman IPv4 refresh template: $PKGMAN_IPV4_REFRESH_TEMPLATE_PATH"
+	render_template_file \
+		"$PKGMAN_IPV4_REFRESH_TEMPLATE_PATH" \
+		"$PKGMAN_IPV4_REFRESH_PATH" \
+		PKGMAN_HOSTS_PATH="$PKGMAN_HOSTS_PATH" \
+		PKGMAN_HOSTS_MARKER_BEGIN="$PKGMAN_HOSTS_MARKER_BEGIN" \
+		PKGMAN_HOSTS_MARKER_END="$PKGMAN_HOSTS_MARKER_END"
+	chmod 755 "$PKGMAN_IPV4_REFRESH_PATH"
 }
 
 write_family_policy_preload_library() {
@@ -1049,6 +1063,12 @@ remove_family_policy_artifacts() {
 	remove_desktop_family_policy
 	remove_sshd_family_policy
 	rm -f "$POLICY_PRELOAD_LIB" "$POLICY_REFRESH_PATH" "$POLICY_STATE_FILE"
+}
+
+refresh_pkgman_ipv4_hosts_now() {
+	if [ -x "$PKGMAN_IPV4_REFRESH_PATH" ]; then
+		"$PKGMAN_IPV4_REFRESH_PATH" >/tmp/haiku-pkgman-ipv4-refresh.out 2>/tmp/haiku-pkgman-ipv4-refresh.err || true
+	fi
 }
 
 restart_sshd_listener() {
@@ -1189,7 +1209,6 @@ main() {
 	need_cmd sed
 	need_cmd tar
 
-	download_release_assets
 	prepare_source_tree
 
 	log "building zerotier-one"
@@ -1206,6 +1225,7 @@ main() {
 	write_public_net_watchdog
 	write_launch_helper
 	write_keepalive_helper
+	write_pkgman_ipv4_refresh_helper
 	cleanup_legacy_client_family_wrappers
 
 	resolve_family_policy_mode
@@ -1227,6 +1247,7 @@ main() {
 
 	log "registering boot autostart"
 	register_boot_autostart
+	refresh_pkgman_ipv4_hosts_now
 
 	if [ "$sshd_reload_required" -eq 1 ]; then
 		log "reloading sshd listener"

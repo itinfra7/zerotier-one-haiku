@@ -3,6 +3,6 @@
     "primaryPort": @PRIMARY_PORT@,
     "allowSecondaryPort": false,
     "portMappingEnabled": false,
-    "allowTcpFallbackRelay": true
+    "allowTcpFallbackRelay": false
   }
 }

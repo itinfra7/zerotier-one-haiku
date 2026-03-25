@@ -67,7 +67,7 @@ def main():
     lines.extend(f"zt_v6={value}" for value in zt_v6)
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = STATE_PATH.with_suffix(".tmp")
-    tmp_path.write_text("\\n".join(lines) + "\\n")
+    tmp_path.write_text("\n".join(lines) + "\n")
     tmp_path.replace(STATE_PATH)
 
 
